@@ -138,7 +138,7 @@ static inline int has_header(const char *str, const char *header)
     return av_stristart(str, header + 2, NULL) || av_stristr(str, header);
 }
 
-static void quic_url_split(char *url, char *hostname, int hostname_size, char *ip,int ip_size)
+static void quic_url_split(const char *url, char *hostname, int hostname_size, char *ip,int ip_size)
 {
     const char *p;
     int url0_len = 0;
@@ -320,6 +320,7 @@ static int quic_open(URLContext *h, const char *uri, int flags)
     else
         h->is_streamed = 1;
 
+    s->app_ctx = (AVApplicationContext *)(intptr_t)s->app_ctx_intptr;
     // replace quic url to https url
     s->url = av_mallocz(strlen(uri) + 1);
     if (!s->url) {
@@ -358,7 +359,7 @@ static int quic_read_wait_timeout(URLContext *h)
             if (!wait_start) {
                 wait_start = av_gettime_relative();
             } else if (av_gettime_relative() - wait_start > timeout) {
-                return AVERROR(ETIMEDOUT);
+                return AVERROR_TCP_READ_TIMEOUT;
             }
         }
     }
@@ -380,6 +381,7 @@ static int quic_read(URLContext *h, uint8_t *buf, int size)
     ret = bvc_quic_client_read(s->handler, buf, size);
     if (ret > 0) {
         s->body_off += ret;
+        av_application_did_io_tcp_read(s->app_ctx, (void*)h, ret);
     }
 
     return ret < 0 ? AVERROR(EIO) : ret;
