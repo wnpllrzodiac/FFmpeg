@@ -382,6 +382,10 @@ static int quic_read(URLContext *h, uint8_t *buf, int size)
     if (ret > 0) {
         s->body_off += ret;
         av_application_did_io_tcp_read(s->app_ctx, (void*)h, ret);
+    } else if (ret == 0 && s->body_off < s->body_len) {
+        av_log(h, AV_LOG_ERROR,
+            "Quic stream ends prematurely at %"PRIu64", should be %"PRIu64"\n", s->body_off, s->body_len);
+        return AVERROR(EIO);
     }
 
     return ret < 0 ? AVERROR(EIO) : ret;
