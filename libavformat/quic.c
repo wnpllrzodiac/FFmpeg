@@ -238,6 +238,8 @@ static int quic_open_internal(URLContext *h)
     av_application_quic_on_tcp_did_open(s->app_ctx, ret);
 
     if (ret != 0) {
+        end_time = av_gettime();
+        av_application_did_http_open(s->app_ctx, (void*)h, opts.url, ret, 0, 0, start_time, end_time);
         bvc_quic_client_destroy(handler);
         av_log(NULL, AV_LOG_ERROR, "quic_open_internal ECONNREFUSED ret = %d\n", ret);
         return AVERROR(ECONNREFUSED);
@@ -247,22 +249,12 @@ static int quic_open_internal(URLContext *h)
 
     av_log(NULL, AV_LOG_INFO, "quic_open_internal resp_code = %d\n", s->resp_code);
     if (s->resp_code != 200 && s->resp_code != 206) {
+        end_time = av_gettime();
+        av_application_did_http_open(s->app_ctx, (void*)h, opts.url, ret, s->resp_code, 0, start_time, end_time);
         bvc_quic_client_destroy(handler);
         return AVERROR(ECONNREFUSED);//TODO AVHTTP_ERRORCODE
     }
 
-    // 1. get "content-length" for body offset and size
-    strcpy(header_name, "content-length");
-    bvc_quic_client_response_header(handler, header_name, strlen(header_name), &header_val, &header_val_len);
-    if (header_val == NULL) {
-        bvc_quic_client_destroy(handler);
-        return AVERROR(EINVAL);//TODO AVHTTP_ERRORCODE
-    }
-    ret = quic_strtoi(header_val, header_val_len, &val);
-    if (ret != 0) {
-        bvc_quic_client_destroy(handler);
-        return AVERROR(EINVAL);//TODO AVHTTP_ERRORCODE
-    }
     // check seekable
     if (s->resp_code == 200) {
         strcpy(header_name, "accept-ranges");
@@ -271,31 +263,32 @@ static int quic_open_internal(URLContext *h)
             h->is_streamed = 0;
         }
     } else if (s->resp_code == 206) {
-        strcpy(header_name, "content-range");
-        bvc_quic_client_response_header(handler, header_name, strlen(header_name), &header_val, &header_val_len);
-        if (header_val != NULL && !av_strncasecmp(header_val, "bytes ", 6)) {
-            // body offset
-            slash = strchr(header_val, '-');
-            len = slash - (header_val + 6);
-            if (slash && len > 0) {
-                ret = quic_strtoi(header_val + 6, len, &val);
-                if (!ret) {
-                    s->body_off = val;
-                }
-            }
-            // body len
-            slash = strchr(header_val, '/') + 1;
-            len = header_val_len - (slash - header_val);
-            if (slash && len > 0) {
-                ret = quic_strtoi(slash, len, &val);
-                if (!ret) {
-                    s->body_len = val;
-                }
-            }
-        }
         h->is_streamed = 0;
     }
-    s->body_len = val;
+
+    strcpy(header_name, "content-range");
+    bvc_quic_client_response_header(handler, header_name, strlen(header_name), &header_val, &header_val_len);
+    if (header_val != NULL && !av_strncasecmp(header_val, "bytes ", 6)) {
+        // body offset
+        slash = strchr(header_val, '-');
+        len = slash - (header_val + 6);
+        if (slash && len > 0) {
+            ret = quic_strtoi(header_val + 6, len, &val);
+            if (!ret) {
+                s->body_off = val;
+            }
+        }
+        // body len
+        slash = strchr(header_val, '/') + 1;
+        len = header_val_len - (slash - header_val);
+        if (slash && len > 0) {
+            ret = quic_strtoi(slash, len, &val);
+            if (!ret) {
+                s->body_len = val;
+            }
+        }
+    }
+
     av_log(NULL, AV_LOG_INFO, "quic_open_internal body_len = %lld\n", s->body_len);
 
     end_time = av_gettime();
