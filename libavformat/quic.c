@@ -46,7 +46,7 @@ typedef struct QUICContext {
     int             proto_version;
     int             init_mtu;
     int             need_cert_verify;
-    int             connect_timeout_ms;
+    int             connect_timeout_us;
     int             rw_timeout;
     int             recv_buffer_size;
     int             seekable; /**< Control seekability, 0 = disable, 1 = enable, -1 = probe. */
@@ -78,7 +78,7 @@ static const AVOption options[] = {
     { "need_cert_verify", "Need quic verify certificates", OFFSET(need_cert_verify), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, .flags = D|E },
     { "recv_buffer_size", "Quic client receive buffer in bytes", OFFSET(recv_buffer_size), AV_OPT_TYPE_INT, { .i64 = 1048576 }, 1024, 67108864, .flags = D|E },
     { "timeout",     "set timeout (in microseconds) of socket I/O operations", OFFSET(rw_timeout),     AV_OPT_TYPE_INT, { .i64 = 2000000 },         -1, INT_MAX, .flags = D|E },
-    { "connect_timeout",  "set connect timeout (in microseconds) of socket", OFFSET(connect_timeout_ms),     AV_OPT_TYPE_INT, { .i64 = 10000000 },         -1, INT_MAX, .flags = D|E },
+    { "connect_timeout",  "set connect timeout (in microseconds) of socket", OFFSET(connect_timeout_us),     AV_OPT_TYPE_INT, { .i64 = 10000000 },         -1, INT_MAX, .flags = D|E },
     { "dash_audio_tcp", "dash audio tcp", OFFSET(dash_audio_tcp), AV_OPT_TYPE_INT, { .i64 = 0},       0, 1, .flags = D|E },
     { "dash_video_tcp", "dash video tcp", OFFSET(dash_video_tcp), AV_OPT_TYPE_INT, { .i64 = 0},       0, 1, .flags = D|E },
     { "ijkapplication", "AVApplicationContext", OFFSET(app_ctx_intptr), AV_OPT_TYPE_INT64, { .i64 = 0 }, INT64_MIN, INT64_MAX, .flags = D },
@@ -214,7 +214,7 @@ static int quic_open_internal(URLContext *h)
     opts.quic_version       = s->proto_version;
     opts.init_mtu           = s->init_mtu;
     opts.need_cert_verify   = s->need_cert_verify;
-    opts.connect_timeout_ms = s->connect_timeout_ms;
+    opts.connect_timeout_ms = s->connect_timeout_us / 1000;
     opts.buffer_size        = s->recv_buffer_size;
 
     s->body_off         = 0;
