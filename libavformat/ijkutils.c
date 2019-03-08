@@ -67,6 +67,7 @@ IJK_DUMMY_PROTOCOL(ijklongurl);
 IJK_DUMMY_PROTOCOL(ijksegment);
 IJK_DUMMY_PROTOCOL(ijktcphook);
 IJK_DUMMY_PROTOCOL(ijkio);
+IJK_DUMMY_PROTOCOL(ijkcronet);
 
 #define IJK_FF_DEMUXER(x)                                                                          \
 extern AVInputFormat ff_##x##_demuxer;                                                               \
