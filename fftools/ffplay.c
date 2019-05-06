@@ -304,6 +304,7 @@ typedef struct VideoState {
     int last_video_stream, last_audio_stream, last_subtitle_stream;
 
     SDL_cond *continue_read_thread;
+    int item_req;
 } VideoState;
 
 /* options specified by the user */
