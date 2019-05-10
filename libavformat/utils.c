@@ -3793,6 +3793,10 @@ FF_ENABLE_DEPRECATION_WARNINGS
                 AVDictionaryEntry *t = av_dict_get(ic->metadata, "skip-calc-frame-rate", NULL, AV_DICT_MATCH_CASE);
                 if (t) {
                     int fps_flag = (int) strtol(t->value, NULL, 10);
+                    if (st->avg_frame_rate.num  <= 0 || st->avg_frame_rate.den <= 0) {
+                        st->avg_frame_rate.num = 900;
+                        st->avg_frame_rate.den = 30;
+                    }
                     if (!st->r_frame_rate.num && st->avg_frame_rate.num > 0 && st->avg_frame_rate.den > 0 && fps_flag > 0) {
                         int avg_fps = st->avg_frame_rate.num / st->avg_frame_rate.den;
                         if (avg_fps > 0 && avg_fps <= 120) {
