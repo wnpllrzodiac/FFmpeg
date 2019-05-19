@@ -191,6 +191,7 @@ struct AVApplicationContext {
     int (*func_on_app_event)(AVApplicationContext *h, int event_type ,void *obj, size_t size);
     int (*func_app_ctrl)(int what, int64_t arg0, void *obj, size_t size);
     int ioproxy;
+    int active_reconnect;
 };
 
 int  av_application_alloc(AVApplicationContext **ph, void *opaque);
