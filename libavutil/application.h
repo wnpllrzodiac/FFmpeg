@@ -61,6 +61,17 @@
 #define AVAPP_EVENT_WILL_DASH_VIDEO_SIZE_CHANGE   0x30005
 #define AVAPP_EVENT_DID_DASH_VIDEO_SIZE_CHANGE    0x30006
 
+#define MAX_IP_LEN 196
+
+#define TCP_STREAM_TYPE_DASH_AUDIO 1
+#define TCP_STREAM_TYPE_DASH_VIDEO 2
+#define TCP_STREAM_TYPE_NORMAL     3
+
+#define DNS_TYPE_NO_USE 0
+#define DNS_TYPE_LOCAL_DNS 1
+#define DNS_TYPE_DNS_CACHE 2
+#define DNS_TYPE_HTTP_DNS 3
+
 typedef struct AVAppDashStream
 {
     int audio_stream_nb;
@@ -100,9 +111,10 @@ typedef struct AVAppIOControl {
 typedef struct AVAppTcpIOControl {
     int  error;
     int  family;
-    char ip[96];
+    char ip[MAX_IP_LEN];
     int  port;
     int  fd;
+    int  dash_audio;
 } AVAppTcpIOControl;
 
 typedef struct AVAppAsyncStatistic {
@@ -136,6 +148,9 @@ typedef struct AVAppIOTraffic
 {
     void   *obj;
     int     bytes;
+    int     dash_audio_nread;
+    int     dash_video_nread;
+    int     normal_nread;
 } AVAppIOTraffic;
 
 typedef struct AVAppSwitchControl{
@@ -169,10 +184,13 @@ typedef struct AVAppSwitchControl{
 typedef struct AVAppDnsEvent
 {
     char host[1024];
-    char ip[96];
+    char ip[MAX_IP_LEN];
     int  is_ip;
     int  hit_cache;
     int64_t  dns_time;
+    int  dns_type;
+    int  dash_audio;
+    int  error_code;
 } AVAppDnsEvent;
 
 typedef struct{
@@ -188,6 +206,8 @@ struct AVApplicationContext {
     int dash_audio_read_len;
     int dash_audio_recv_buffer_size;
     int dash_video_recv_buffer_size;
+    int dash_audio_tcp;
+    int dash_video_tcp;
     int (*func_on_app_event)(AVApplicationContext *h, int event_type ,void *obj, size_t size);
     int (*func_app_ctrl)(int what, int64_t arg0, void *obj, size_t size);
     int ioproxy;
@@ -207,14 +227,14 @@ void av_application_will_http_seek(AVApplicationContext *h, void *obj, const cha
 void av_application_did_http_seek(AVApplicationContext *h, void *obj, const char *url, int64_t offset, int error,
                                   int http_code, int64_t start_time, int64_t end_time);
 
-void av_application_did_io_tcp_read(AVApplicationContext *h, void *obj, int bytes);
+void av_application_did_io_tcp_read(AVApplicationContext *h, void *obj, int bytes, int nread, int type);
 
 int  av_application_on_switch_control(AVApplicationContext *h, int event_type, AVAppSwitchControl *control);
 
 int  av_application_on_io_control(AVApplicationContext *h, int event_type, AVAppIOControl *control);
 
 int av_application_on_tcp_will_open(AVApplicationContext *h);
-int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control);
+int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio);
 int av_application_quic_on_tcp_did_open(AVApplicationContext *h, int error);
 
 void av_application_on_async_statistic(AVApplicationContext *h, AVAppAsyncStatistic *statistic);
@@ -223,6 +243,6 @@ void av_application_on_async_read_speed(AVApplicationContext *h, AVAppAsyncReadS
 void av_application_on_dash_info(AVApplicationContext *h, int event_type, AVAppDashChange *info);
 
 void av_application_on_dns_will_open(AVApplicationContext *h, char *hostname);
-void av_application_on_dns_did_open(AVApplicationContext *h, char *hostname, char *ip, int hit_cache, int64_t dns_time);
+void av_application_on_dns_did_open(AVApplicationContext *h, char *hostname, char *ip, int dns_type, int64_t dns_time, int is_audio, int error_code);
 
 #endif /* AVUTIL_APPLICATION_H */
