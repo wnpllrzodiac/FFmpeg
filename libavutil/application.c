@@ -163,7 +163,7 @@ int av_application_on_tcp_will_open(AVApplicationContext *h)
 }
 
 // only callback returns error
-int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control)
+int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio)
 {
     struct sockaddr_storage so_stg;
     int       ret = 0;
@@ -179,6 +179,7 @@ int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, A
         return 0;
     control->error = error;
     control->fd = fd;
+    control->dash_audio = is_audio;
 
     so_family = ((struct sockaddr*)&so_stg)->sa_family;
     switch (so_family) {
@@ -227,7 +228,7 @@ void av_application_on_async_read_speed(AVApplicationContext *h, AVAppAsyncReadS
         h->func_on_app_event(h, AVAPP_EVENT_ASYNC_READ_SPEED, (void *)speed, sizeof(AVAppAsyncReadSpeed));
 }
 
-void av_application_did_io_tcp_read(AVApplicationContext *h, void *obj, int bytes)
+void av_application_did_io_tcp_read(AVApplicationContext *h, void *obj, int bytes, int nread, int type)
 {
     AVAppIOTraffic event = {0};
     if (!h || !obj || bytes <= 0)
@@ -235,6 +236,17 @@ void av_application_did_io_tcp_read(AVApplicationContext *h, void *obj, int byte
 
     event.obj        = obj;
     event.bytes      = bytes;
+    event.dash_audio_nread = -1;
+    event.dash_video_nread = -1;
+    event.normal_nread = -1;
+
+    if (type == TCP_STREAM_TYPE_DASH_AUDIO) {
+        event.dash_audio_nread = nread;
+    } else if (type == TCP_STREAM_TYPE_DASH_VIDEO) {
+        event.dash_video_nread = nread;
+    } else {
+        event.normal_nread = nread;
+    }
 
     av_application_on_io_traffic(h, &event);
 }
@@ -254,18 +266,17 @@ void av_application_on_dns_will_open(AVApplicationContext *h, char *hostname) {
     }
 }
 
-void av_application_on_dns_did_open(AVApplicationContext *h, char *hostname, char *ip, int hit_cache, int64_t dns_time) {
+void av_application_on_dns_did_open(AVApplicationContext *h, char *hostname, char *ip, int dns_type, int64_t dns_time, int is_audio, int error_code) {
     if (h && h->func_on_app_event) {
         AVAppDnsEvent event = {0};
         if (hostname != NULL && ip != NULL) {
             strcpy(event.host, hostname);
             strcpy(event.ip, ip);
-            if (!strcmp(event.host, event.ip)) {
-                event.is_ip = 1;
-            }
-            event.hit_cache = hit_cache;
+            event.dns_type = dns_type;
             event.dns_time = dns_time;
+            event.dash_audio = is_audio;
         }
+        event.error_code = error_code;
         h->func_on_app_event(h, AVAPP_EVENT_DID_DNS_OPEN, (void *)&event, sizeof(AVAppDnsEvent));
     }
 }
