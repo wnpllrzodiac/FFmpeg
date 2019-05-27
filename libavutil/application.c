@@ -163,7 +163,7 @@ int av_application_on_tcp_will_open(AVApplicationContext *h)
 }
 
 // only callback returns error
-int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio)
+int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio, int64_t duration)
 {
     struct sockaddr_storage so_stg;
     int       ret = 0;
@@ -179,7 +179,8 @@ int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, A
         return 0;
     control->error = error;
     control->fd = fd;
-    control->dash_audio = is_audio;
+    control->is_audio = is_audio;
+    control->duration = duration;
 
     so_family = ((struct sockaddr*)&so_stg)->sa_family;
     switch (so_family) {
@@ -274,9 +275,27 @@ void av_application_on_dns_did_open(AVApplicationContext *h, char *hostname, cha
             strcpy(event.ip, ip);
             event.dns_type = dns_type;
             event.dns_time = dns_time;
-            event.dash_audio = is_audio;
+            event.is_audio = is_audio;
         }
         event.error_code = error_code;
         h->func_on_app_event(h, AVAPP_EVENT_DID_DNS_OPEN, (void *)&event, sizeof(AVAppDnsEvent));
+    }
+}
+
+void av_application_on_url_changed(AVApplicationContext *h,int url_change_count,int is_audio) {
+    if (h && h->func_on_app_event) {
+        AVAppUrlChanged event = {0};
+        event.is_audio = is_audio;
+        event.url_change_count = url_change_count;
+        h->func_on_app_event(h, AVAPP_EVENT_URL_CHANGED, (void *)&event, sizeof(AVAppDnsEvent));
+    }
+}
+
+void av_application_on_ijk_find_stream_info(AVApplicationContext *h, int64_t duration, int is_audio) {
+    if (h && h->func_on_app_event) {
+        AVAppFindStreamInfo event = {0};
+
+        event.duration = duration;
+        h->func_on_app_event(h, AVAPP_EVENT_IJK_FIND_STREAM_INFO, (void *)&event, sizeof(AVAppFindStreamInfo));
     }
 }

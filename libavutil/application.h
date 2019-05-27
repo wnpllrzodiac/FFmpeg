@@ -32,6 +32,9 @@
 #define AVAPP_EVENT_WILL_DNS_OPEN  5 //AVAppDnsEvent
 #define AVAPP_EVENT_DID_DNS_OPEN   6 //AVAppDnsEvent
 
+#define AVAPP_EVENT_URL_CHANGED  7 // URL CHANGE EVENT
+#define AVAPP_EVENT_IJK_FIND_STREAM_INFO   8 // IJK FIND STREAM INFO EVENT
+
 #define AVAPP_EVENT_ASYNC_STATISTIC     0x11000 //AVAppAsyncStatistic
 #define AVAPP_EVENT_ASYNC_READ_SPEED    0x11001 //AVAppAsyncReadSpeed
 #define AVAPP_EVENT_IO_TRAFFIC          0x12204 //AVAppIOTraffic
@@ -114,7 +117,8 @@ typedef struct AVAppTcpIOControl {
     char ip[MAX_IP_LEN];
     int  port;
     int  fd;
-    int  dash_audio;
+    int  is_audio;
+    int64_t  duration;
 } AVAppTcpIOControl;
 
 typedef struct AVAppAsyncStatistic {
@@ -189,7 +193,7 @@ typedef struct AVAppDnsEvent
     int  hit_cache;
     int64_t  dns_time;
     int  dns_type;
-    int  dash_audio;
+    int  is_audio;
     int  error_code;
 } AVAppDnsEvent;
 
@@ -197,7 +201,19 @@ typedef struct{
     volatile void * item;
     volatile int item_switch_req;
     void* mutex;
-}IJKItemApplication;
+} IJKItemApplication;
+
+typedef struct{
+    int64_t timestamp;
+    int64_t duration;
+    int is_audio;
+} AVAppFindStreamInfo;
+
+typedef struct{
+    int64_t timestamp;
+    int is_audio;
+    int url_change_count;
+} AVAppUrlChanged;
 
 typedef struct AVApplicationContext AVApplicationContext;
 struct AVApplicationContext {
@@ -234,7 +250,7 @@ int  av_application_on_switch_control(AVApplicationContext *h, int event_type, A
 int  av_application_on_io_control(AVApplicationContext *h, int event_type, AVAppIOControl *control);
 
 int av_application_on_tcp_will_open(AVApplicationContext *h);
-int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio);
+int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio, int64_t duration);
 int av_application_quic_on_tcp_did_open(AVApplicationContext *h, int error);
 
 void av_application_on_async_statistic(AVApplicationContext *h, AVAppAsyncStatistic *statistic);
@@ -244,5 +260,8 @@ void av_application_on_dash_info(AVApplicationContext *h, int event_type, AVAppD
 
 void av_application_on_dns_will_open(AVApplicationContext *h, char *hostname);
 void av_application_on_dns_did_open(AVApplicationContext *h, char *hostname, char *ip, int dns_type, int64_t dns_time, int is_audio, int error_code);
+
+void av_application_on_url_changed(AVApplicationContext *h,int url_change_count,int is_audio);
+void av_application_on_ijk_find_stream_info(AVApplicationContext *h, int64_t duration, int is_audio);
 
 #endif /* AVUTIL_APPLICATION_H */

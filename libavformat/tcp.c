@@ -357,6 +357,7 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
     AVAppTcpIOControl control = {0};
     DnsCacheEntry *dns_entry = NULL;
     int64_t dns_time = 0;
+    int64_t tcp_time = 0;
     char ipbuf[MAX_IP_LEN];
     struct sockaddr_in *ipaddr;
     char *c_ipaddr = NULL;
@@ -523,20 +524,20 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
             av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_WILL_TCP_OPEN");
             goto fail1;
         }
-
+        tcp_time = av_gettime();
         if ((ret = ff_listen_connect(fd, cur_ai->ai_addr, cur_ai->ai_addrlen,
                                      s->open_timeout / 1000, h, !!cur_ai->ai_next)) < 0) {
             if (ret == AVERROR(ETIMEDOUT)) {
                 ret = AVERROR_TCP_CONNECT_TIMEOUT;
             }
-            if (av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control, s->dash_audio_tcp))
+            if (av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control, s->dash_audio_tcp, (av_gettime() - tcp_time) / 1000))
                 goto fail1;
             if (ret == AVERROR_EXIT)
                 goto fail1;
             else
                 goto fail;
         } else {
-            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control, s->dash_audio_tcp);
+            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control, s->dash_audio_tcp, (av_gettime() - tcp_time) / 1000);
             av_log(NULL, AV_LOG_WARNING, "raymond control.ip = %s", control.ip);
             if (ret) {
                 av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_DID_TCP_OPEN");
@@ -560,6 +561,7 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
     return 0;
 
  fail:
+ av_log(NULL, AV_LOG_INFO, "raymond tcp ret = %d\n", ret);
     if (cur_ai->ai_next) {
         /* Retry with the next sockaddr */
         cur_ai = cur_ai->ai_next;
@@ -714,7 +716,7 @@ static int tcp_fast_open(URLContext *h, const char *http_request, const char *ur
         if ((ret = ff_sendto(fd, http_request, strlen(http_request), FAST_OPEN_FLAG,
                  cur_ai->ai_addr, cur_ai->ai_addrlen, s->open_timeout / 1000, h, !!cur_ai->ai_next)) < 0) {
             s->fastopen_success = 0;
-            if (av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control, s->dash_audio_tcp))
+            if (av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control, s->dash_audio_tcp, 0))
                 goto fail1;
             if (ret == AVERROR_EXIT)
                 goto fail1;
@@ -726,7 +728,7 @@ static int tcp_fast_open(URLContext *h, const char *http_request, const char *ur
             } else {
                 s->fastopen_success = 1;
             }
-            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control, s->dash_audio_tcp);
+            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control, s->dash_audio_tcp, 0);
             if (ret) {
                 av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_DID_TCP_OPEN");
                 goto fail1;
