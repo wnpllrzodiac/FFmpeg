@@ -185,6 +185,36 @@ typedef struct AVAppSwitchControl{
     int audio_only;
 } AVAppSwitchControl;
 
+typedef enum {
+    SWITCH_AUDIO = 1,
+    SWITCH_VIDEO = 2,
+}SWITCH_MODE;
+
+typedef struct {
+    void *opaque;
+    /*
+       @param: opaque 表示上下文。
+       @param: switch_serial 由ffplay控制，每一次切换画质该值自增。
+       @param: switch_point 单位ms，用于表示切换的时间点，由ffplay估算出来。
+       @param: vid aid 音视频清晰度id。
+       @return: 0 表示成功 <0 表示失败
+     */
+    int (*switch_start)(void * opaque, int64_t switch_serial, int64_t switch_point, int vid, int aid);
+
+    /*
+       @param: opaque 表示上下文
+       @param: switch_serial 由ffplay控制，每一次切换画质该值自增。
+       @param: switch_mode 表示切音频、切视频、切音视频 3种情况返回给ffplay
+       @return: <0 表示失败  -EAGIN 表示正在切换中  >0 表示真正的switch point 
+       例如 ffplay下发switch point是3s，dash返回的实际switch point是5s
+     */
+    int64_t (*switch_wait_complete)(void * opaque, int switch_serial, int *switch_mode);	
+
+    // update prop buffer_level audio_only;
+    int (*switch_cmd)(void *oqaque, int cmd, AVDictionary **pm);
+}AVAppSwitchControlV2;	
+
+
 typedef struct AVAppDnsEvent
 {
     char host[1024];
