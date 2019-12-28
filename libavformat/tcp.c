@@ -62,7 +62,14 @@ typedef struct TCPContext {
     int dash_audio_tcp;
     int dash_video_tcp;
     int enable_ipv6;
+    pthread_t ipv6_check_thread;
+    int ipv6_check_timeout;
 } TCPContext;
+
+#define IPV6_UNKNOWN 0
+#define IPV6_CHECKING 1
+#define IPV6_FAILED 2
+#define IPV6_SUCCESSED 3
 
 #define FAST_OPEN_FLAG 0x20000000
 
@@ -87,6 +94,7 @@ static const AVOption options[] = {
     { "dash_audio_tcp", "dash audio tcp", OFFSET(dash_audio_tcp), AV_OPT_TYPE_INT, { .i64 = 0},       0, 1, .flags = D|E },
     { "dash_video_tcp", "dash video tcp", OFFSET(dash_video_tcp), AV_OPT_TYPE_INT, { .i64 = 0},       0, 1, .flags = D|E },
     { "enable_ipv6", "priority of use ipv6", OFFSET(enable_ipv6), AV_OPT_TYPE_INT, { .i64 = 1},       0, 1, .flags = D|E },
+    { "ipv6_check_timeout", "set ipv6 check connect timeout (in microseconds) of socket", OFFSET(ipv6_check_timeout), AV_OPT_TYPE_INT, { .i64 = -1 },         -1, INT_MAX, .flags = D|E },
     { NULL }
 };
 
@@ -96,6 +104,13 @@ static const AVClass tcp_class = {
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
+
+static int gs_ipv6_check_timeout = -1;
+static int gs_ipv6_state = IPV6_UNKNOWN;
+static pthread_mutex_t gs_check_ipv6_mutex;
+static pthread_once_t gs_key_once = PTHREAD_ONCE_INIT;
+static int gs_init_mutex_ret = -1;
+static int gs_need_tcp_ipv6_check_report = 1;
 
 int ijk_tcp_getaddrinfo_nonblock(const char *hostname, const char *servname,
                                  const struct addrinfo *hints, struct addrinfo **res,
@@ -345,6 +360,130 @@ int ijk_tcp_getaddrinfo_nonblock(const char *hostname, const char *servname,
 }
 #endif
 
+static void private_mutex_init(void){
+    gs_init_mutex_ret = pthread_mutex_init(&gs_check_ipv6_mutex, NULL);
+}
+
+static int try_poll_interrupt(struct pollfd *p, nfds_t nfds, int timeout)
+{
+    int runs = 0;
+    int ret = 0;
+
+    if(timeout > 0) {
+        runs = timeout / POLLING_TIME;
+    }
+
+    do {
+        ret = poll(p, nfds, POLLING_TIME);
+        if (ret != 0)
+            break;
+    } while (timeout <= 0 || runs-- > 0);
+
+    if (!ret)
+        return AVERROR(ETIMEDOUT);
+    if (ret < 0)
+        return ff_neterrno();
+    return ret;
+}
+
+static int try_listen_connect(int fd, const struct sockaddr *addr,
+                      socklen_t addrlen, int timeout)
+{
+    struct pollfd p = {fd, POLLOUT, 0};
+    int ret;
+    socklen_t optlen;
+
+    if (ff_socket_nonblock(fd, 1) < 0) {
+        av_log(NULL, AV_LOG_DEBUG, "ff_socket_nonblock failed\n");
+        return -1;
+    }
+
+    while ((ret = connect(fd, addr, addrlen))) {
+        ret = ff_neterrno();
+        switch (ret) {
+            case AVERROR(EINTR):
+                continue;
+            case AVERROR(EINPROGRESS):
+            case AVERROR(EAGAIN):
+                ret = try_poll_interrupt(&p, 1, timeout);
+                if (ret < 0)
+                    return ret;
+                optlen = sizeof(ret);
+                if (getsockopt (fd, SOL_SOCKET, SO_ERROR, &ret, &optlen))
+                    ret = AVUNERROR(ff_neterrno());
+                if (ret != 0) {
+                    char errbuf[100];
+                    ret = AVERROR(ret);
+                    av_strerror(ret, errbuf, sizeof(errbuf));
+                    av_log(NULL, AV_LOG_ERROR, "Connection ipv6 to failed: %s\n", errbuf);
+                }
+        default:
+            return ret;
+        }
+    }
+    return ret;
+}
+
+static void once_check_ipv6_l(void *arg)
+{
+    struct addrinfo *cur_ai = (struct addrinfo *)arg;
+    char ipbuf[MAX_IP_LEN];
+    struct sockaddr_in6 * sockaddr_v6 = (struct sockaddr_in6 *)cur_ai->ai_addr;
+    char *c_ipaddr = (char *)inet_ntop(AF_INET6, &sockaddr_v6->sin6_addr, ipbuf, MAX_IP_LEN);
+
+    av_log(NULL, AV_LOG_INFO, "will check ipv6 c_ipaddr = %s\n", c_ipaddr);
+    int fd = ff_socket(cur_ai->ai_family, cur_ai->ai_socktype, cur_ai->ai_protocol);
+    if (fd < 0) {
+        gs_ipv6_state = IPV6_FAILED;
+        av_log(NULL, AV_LOG_INFO, "did check ipv6 c_ipaddr = %s, is IPV6_FAILED\n", c_ipaddr);
+        return;
+    }
+
+    int ret = try_listen_connect(fd, cur_ai->ai_addr, cur_ai->ai_addrlen,
+                                     gs_ipv6_check_timeout);
+    if (ret) {
+        gs_ipv6_state = IPV6_FAILED;
+        av_log(NULL, AV_LOG_INFO, "did check ipv6 c_ipaddr = %s, is IPV6_FAILED\n", c_ipaddr);
+    } else {
+        gs_ipv6_state = IPV6_SUCCESSED;
+        av_log(NULL, AV_LOG_INFO, "did check ipv6 c_ipaddr = %s, is IPV6_SUCCESSED\n", c_ipaddr);
+    }
+}
+
+static void *once_check_ipv6(TCPContext *s, struct addrinfo *cur_v6_ai)
+{
+    pthread_mutex_lock(&gs_check_ipv6_mutex);
+    if (gs_ipv6_state != IPV6_UNKNOWN) {
+        return NULL;
+    } else {
+        gs_ipv6_state = IPV6_CHECKING;
+    }
+    struct addrinfo *cur_ai_bak = (struct addrinfo *) av_mallocz(sizeof(struct addrinfo));
+    memcpy(cur_ai_bak, cur_v6_ai, sizeof(struct addrinfo));
+    if (cur_ai_bak->ai_family == AF_INET6) {
+        cur_ai_bak->ai_addr = (struct sockaddr_in6 *) av_mallocz(sizeof(struct sockaddr_in6));
+    } else {
+        cur_ai_bak->ai_addr = (struct sockaddr *) av_mallocz(sizeof(struct sockaddr));
+    }
+    if (!cur_ai_bak->ai_addr) {
+        av_freep(&cur_ai_bak);
+        gs_ipv6_state = IPV6_UNKNOWN;
+    } else {
+        if (cur_ai_bak->ai_family == AF_INET6) {
+            memcpy(cur_ai_bak->ai_addr, cur_v6_ai->ai_addr, sizeof(struct sockaddr_in6));
+        } else {
+            memcpy(cur_ai_bak->ai_addr, cur_v6_ai->ai_addr, sizeof(struct sockaddr));
+        }
+        gs_ipv6_check_timeout = s->ipv6_check_timeout;
+        int ret = pthread_create(&s->ipv6_check_thread, NULL, once_check_ipv6_l, cur_ai_bak);
+        if (ret) {
+            gs_ipv6_state = IPV6_UNKNOWN;
+        }
+    }
+    pthread_mutex_unlock(&gs_check_ipv6_mutex);
+    return NULL;
+}
+
 /* return non zero if error */
 static int tcp_open(URLContext *h, const char *uri, int flags)
 {
@@ -365,6 +504,7 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
     char ipbuf[MAX_IP_LEN];
     struct sockaddr_in *ipaddr;
     char *c_ipaddr = NULL;
+    int orig_ipv6_enable = s->enable_ipv6;
 
     if (s->open_timeout < 0) {
         s->open_timeout = 15000000;
@@ -464,7 +604,13 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
     }
     dns_time = (av_gettime() - dns_time) / 1000;
 
-    while (cur_ai->ai_next && cur_ai->ai_next->ai_addr) {
+    if (gs_ipv6_state != IPV6_SUCCESSED) {
+        s->enable_ipv6 = 0;
+    }
+
+    av_log(NULL, AV_LOG_INFO, "s->enable_ipv6 = %d, orig_ipv6_enable = %d\n", s->enable_ipv6, orig_ipv6_enable);
+
+    while (!dns_entry && cur_ai->ai_next && cur_ai->ai_next->ai_addr) {
         if (cur_ai->ai_family == AF_INET && cur_v4_ai == NULL) {
             ipaddr = (struct sockaddr_in *)cur_ai->ai_addr;
             c_ipaddr = (char *)inet_ntop(AF_INET, &ipaddr->sin_addr, ipbuf, MAX_IP_LEN);
@@ -480,6 +626,30 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
             break;
         }
         cur_ai = cur_ai->ai_next;
+    }
+
+    if (dns_entry) {
+        if (cur_ai->ai_family == AF_INET && cur_v4_ai == NULL) {
+            cur_v4_ai = cur_ai;
+            if (cur_ai->ai_next && cur_ai->ai_next->ai_family == AF_INET6 && cur_v6_ai == NULL) {
+                cur_v6_ai = cur_ai->ai_next;
+            }
+        } else if (cur_ai->ai_family == AF_INET6 && cur_v6_ai == NULL) {
+            cur_v6_ai = cur_ai;
+            if (cur_ai->ai_next && cur_ai->ai_next->ai_family == AF_INET && cur_v4_ai == NULL) {
+                cur_v4_ai = cur_ai->ai_next;
+            }
+        }
+    }
+
+
+    if (orig_ipv6_enable && cur_v6_ai != NULL && gs_ipv6_state == IPV6_UNKNOWN) {
+        if (gs_init_mutex_ret) {
+            pthread_once(&gs_key_once, private_mutex_init);
+        }
+        if (gs_ipv6_state == IPV6_UNKNOWN && !gs_init_mutex_ret) {
+            once_check_ipv6(s, cur_v6_ai);
+        }
     }
 
     if ((s->enable_ipv6 || cur_v4_ai == NULL) && cur_v6_ai != NULL) {
@@ -562,24 +732,36 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
             goto fail1;
         }
         tcp_time = av_gettime();
+        int last_check_ipv6_state = gs_ipv6_state;
+        if (gs_need_tcp_ipv6_check_report && (last_check_ipv6_state == IPV6_FAILED || last_check_ipv6_state == IPV6_SUCCESSED)) {
+            gs_need_tcp_ipv6_check_report = 0;
+        } else {
+            last_check_ipv6_state = IPV6_UNKNOWN;
+        }
         if ((ret = ff_listen_connect(fd, cur_ai->ai_addr, cur_ai->ai_addrlen,
                                      s->open_timeout / 1000, h, !!cur_ai->ai_next)) < 0) {
             if (ret == AVERROR(ETIMEDOUT)) {
                 ret = AVERROR_TCP_CONNECT_TIMEOUT;
             }
-            if (av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control, s->dash_audio_tcp, cur_ai->ai_family, (av_gettime() - tcp_time) / 1000))
+            if (av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control, s->dash_audio_tcp, cur_ai->ai_family, last_check_ipv6_state, (av_gettime() - tcp_time) / 1000))
                 goto fail1;
             if (ret == AVERROR_EXIT)
                 goto fail1;
             else
                 goto fail;
         } else {
-            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control, s->dash_audio_tcp, cur_ai->ai_family, (av_gettime() - tcp_time) / 1000);
+            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control, s->dash_audio_tcp, cur_ai->ai_family, last_check_ipv6_state, (av_gettime() - tcp_time) / 1000);
             if (ret) {
                 av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_DID_TCP_OPEN");
                 goto fail1;
             } else if (!dns_entry && !strstr(uri, control.ip) && s->dns_cache_timeout > 0) {
-                add_dns_cache_entry(uri, cur_ai, s->dns_cache_timeout);
+                if (cur_ai == cur_v4_ai && cur_v6_ai) {
+                    add_dns_cache_entry(uri, cur_ai, cur_v6_ai, s->dns_cache_timeout);
+                } else if (cur_ai == cur_v6_ai && cur_v4_ai) {
+                    add_dns_cache_entry(uri, cur_ai, cur_v4_ai, s->dns_cache_timeout);
+                } else {
+                    add_dns_cache_entry(uri, cur_ai, NULL, s->dns_cache_timeout);
+                }
                 av_log(NULL, AV_LOG_INFO, "add dns cache uri = %s, ip = %s port = %d\n", uri , control.ip, control.port);
             }
             av_log(NULL, AV_LOG_INFO, "tcp did open uri = %s, ip = %s port = %d\n", uri , control.ip, control.port);
@@ -751,7 +933,7 @@ static int tcp_fast_open(URLContext *h, const char *http_request, const char *ur
         if ((ret = ff_sendto(fd, http_request, strlen(http_request), FAST_OPEN_FLAG,
                  cur_ai->ai_addr, cur_ai->ai_addrlen, s->open_timeout / 1000, h, !!cur_ai->ai_next)) < 0) {
             s->fastopen_success = 0;
-            if (av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control, s->dash_audio_tcp, cur_ai->ai_family, 0))
+            if (av_application_on_tcp_did_open(s->app_ctx, ret, fd, &control, s->dash_audio_tcp, cur_ai->ai_family, IPV6_UNKNOWN, 0))
                 goto fail1;
             if (ret == AVERROR_EXIT)
                 goto fail1;
@@ -763,12 +945,12 @@ static int tcp_fast_open(URLContext *h, const char *http_request, const char *ur
             } else {
                 s->fastopen_success = 1;
             }
-            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control, s->dash_audio_tcp, cur_ai->ai_family, 0);
+            ret = av_application_on_tcp_did_open(s->app_ctx, 0, fd, &control, s->dash_audio_tcp, cur_ai->ai_family, IPV6_UNKNOWN, 0);
             if (ret) {
                 av_log(NULL, AV_LOG_WARNING, "terminated by application in AVAPP_CTRL_DID_TCP_OPEN");
                 goto fail1;
             } else if (!dns_entry && !strstr(uri, control.ip) && s->dns_cache_timeout > 0) {
-                add_dns_cache_entry(uri, cur_ai, s->dns_cache_timeout);
+                add_dns_cache_entry(uri, cur_ai, NULL, s->dns_cache_timeout);
                 av_log(NULL, AV_LOG_INFO, "add dns cache uri = %s, ip = %s\n", uri , control.ip);
             }
             av_log(NULL, AV_LOG_INFO, "tcp did open uri = %s, ip = %s\n", uri , control.ip);

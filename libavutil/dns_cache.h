@@ -33,7 +33,7 @@ typedef struct DnsCacheEntry {
 DnsCacheEntry *get_dns_cache_reference(const char *uri);
 int release_dns_cache_reference(const char *uri, DnsCacheEntry **p_entry);
 int remove_dns_cache_entry(const char *uri);
-int add_dns_cache_entry(const char *uri, struct addrinfo *cur_ai, int64_t timeout);
+int add_dns_cache_entry(const char *uri, struct addrinfo *cur_ai, struct addrinfo *next_ai, int64_t timeout);
 int remove_all_dns_cache_entry(void);
 
 

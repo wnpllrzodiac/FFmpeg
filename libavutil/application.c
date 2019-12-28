@@ -171,7 +171,7 @@ int av_application_on_tcp_will_open(AVApplicationContext *h, int ai_family)
 }
 
 // only callback returns error
-int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio, int ai_family, int64_t duration)
+int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio, int ai_family, int ipv6_state, int64_t duration)
 {
     struct sockaddr_storage so_stg;
     int       ret = 0;
@@ -189,6 +189,7 @@ int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, A
     } else if (ai_family == AF_INET6) {
         control->family = WRAP_INET6_FAMILY;
     }
+    control->ipv6_state = ipv6_state;
 
     if (fd <= 0) {
         control->error = error;
