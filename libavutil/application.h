@@ -104,6 +104,7 @@ typedef struct AVAppTcpIOControl {
     int  fd;
     int  is_audio;
     int64_t  duration;
+    int ipv6_state;
 } AVAppTcpIOControl;
 
 typedef struct AVAppAsyncStatistic {
@@ -255,7 +256,7 @@ void av_application_did_io_tcp_read(AVApplicationContext *h, void *obj, int byte
 int  av_application_on_io_control(AVApplicationContext *h, int event_type, AVAppIOControl *control);
 
 int av_application_on_tcp_will_open(AVApplicationContext *h, int ai_family);
-int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio, int ai_family, int64_t duration);
+int av_application_on_tcp_did_open(AVApplicationContext *h, int error, int fd, AVAppTcpIOControl *control, int is_audio, int ai_family, int ipv6_state, int64_t duration);
 
 void av_application_on_async_statistic(AVApplicationContext *h, AVAppAsyncStatistic *statistic);
 void av_application_on_async_read_speed(AVApplicationContext *h, AVAppAsyncReadSpeed *speed);

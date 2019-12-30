@@ -48,6 +48,14 @@ static void inner_init(void) {
 
 static void free_private_addrinfo(struct addrinfo **p_ai) {
     struct addrinfo *ai = *p_ai;
+    struct addrinfo *next_ai = ai->ai_next;
+
+    if(next_ai) {
+        if (next_ai->ai_addr) {
+            av_freep(&next_ai->ai_addr);
+        }
+        av_freep(&next_ai);
+    }
 
     if (ai) {
         if (ai->ai_addr) {
@@ -71,7 +79,7 @@ static int inner_remove_dns_cache(const char *uri, DnsCacheEntry *dns_cache_entr
     return 0;
 }
 
-static DnsCacheEntry *new_dns_cache_entry(const char *uri, struct addrinfo *cur_ai, int64_t timeout) {
+static DnsCacheEntry *new_dns_cache_entry(const char *uri, struct addrinfo *cur_ai, struct addrinfo *next_ai, int64_t timeout) {
     DnsCacheEntry *new_entry = NULL;
     int64_t cur_time         = av_gettime_relative();
 
@@ -109,8 +117,29 @@ static DnsCacheEntry *new_dns_cache_entry(const char *uri, struct addrinfo *cur_
         memcpy(new_entry->res->ai_addr, cur_ai->ai_addr, sizeof(struct sockaddr));
     }
 
+    if (next_ai) {
+        struct addrinfo *new_ai_next = (struct addrinfo *) av_mallocz(sizeof(struct addrinfo));
+        if (new_ai_next) {
+            memcpy(new_ai_next, next_ai, sizeof(struct addrinfo));
+            if (new_ai_next->ai_family == AF_INET6) {
+                new_ai_next->ai_addr = (struct sockaddr_in6 *) av_mallocz(sizeof(struct sockaddr_in6));
+            } else {
+                new_ai_next->ai_addr = (struct sockaddr *) av_mallocz(sizeof(struct sockaddr));
+            }
+            if (!new_ai_next->ai_addr) {
+                av_freep(&new_ai_next);
+            } else {
+                if (new_ai_next->ai_family == AF_INET6) {
+                    memcpy(new_ai_next->ai_addr, next_ai->ai_addr, sizeof(struct sockaddr_in6));
+                } else {
+                    memcpy(new_ai_next->ai_addr, next_ai->ai_addr, sizeof(struct sockaddr));
+                }
+                new_entry->res->ai_next = new_ai_next;
+            }
+        }
+    }
+
     new_entry->res->ai_canonname = NULL;
-    new_entry->res->ai_next      = NULL;
     new_entry->ref_count         = 0;
     new_entry->delete_flag       = 0;
     new_entry->expired_time      = cur_time + timeout * 1000;
@@ -193,7 +222,7 @@ int remove_dns_cache_entry(const char *uri) {
     return 0;
 }
 
-int add_dns_cache_entry(const char *uri, struct addrinfo *cur_ai, int64_t timeout) {
+int add_dns_cache_entry(const char *uri, struct addrinfo *cur_ai, struct addrinfo *next_ai, int64_t timeout) {
     DnsCacheEntry *new_entry = NULL;
     DnsCacheEntry *old_entry = NULL;
     AVDictionaryEntry *elem  = NULL;
@@ -216,7 +245,7 @@ int add_dns_cache_entry(const char *uri, struct addrinfo *cur_ai, int64_t timeou
                 goto fail;
             }
         }
-        new_entry = new_dns_cache_entry(uri, cur_ai, timeout);
+        new_entry = new_dns_cache_entry(uri, cur_ai, next_ai, timeout);
         if (new_entry) {
             av_dict_set_int(&context->dns_dictionary, uri, (int64_t) (intptr_t) new_entry, 0);
         }
