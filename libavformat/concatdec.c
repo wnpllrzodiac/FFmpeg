@@ -32,6 +32,7 @@
 typedef enum ConcatMatchMode {
     MATCH_ONE_TO_ONE,
     MATCH_EXACT_ID,
+    MATCH_EXACT_CODEC_ID,
 } ConcatMatchMode;
 
 typedef struct ConcatStream {
@@ -280,6 +281,56 @@ static int match_streams_exact_id(AVFormatContext *avf)
     return 0;
 }
 
+static int match_streams_exact_codec_id(AVFormatContext *avf)
+{
+    ConcatContext *cat = avf->priv_data;
+    int i, j = 0, ret;
+    int avf_nb_streams = avf->nb_streams;
+    int inner_stream_index_map[AVMEDIA_TYPE_NB];
+
+    for (i = 0; i < AVMEDIA_TYPE_NB; i ++) {
+        inner_stream_index_map[i] = AVMEDIA_TYPE_UNKNOWN;
+    }
+
+    for (i = cat->cur_file->nb_streams; i < cat->avf->nb_streams; i++)  {
+        AVStream *st = NULL;
+        enum AVMediaType media_type = cat->avf->streams[i]->codecpar->codec_type;
+	if (inner_stream_index_map[media_type] != AVMEDIA_TYPE_UNKNOWN)
+            continue;
+	if (!avf_nb_streams) {
+            st = avformat_new_stream(avf, NULL);
+            if (!st) 
+                return AVERROR(ENOMEM);
+            av_log(avf, AV_LOG_INFO,
+                   "[%s] 1inner #%d with out stream #%d id 0x%x  codec_id %d \n",
+                  __func__, i, j, cat->avf->streams[i]->id, cat->avf->streams[i]->codecpar->codec_id);
+            inner_stream_index_map[media_type] = i;
+            cat->cur_file->streams[i].out_stream_index = j;
+            j++;
+        } else {
+            for (j = 0; j < avf->nb_streams; j++) {
+                /*find same codec id*/
+                if (cat->avf->streams[i]->codecpar->codec_id == avf->streams[j]->codecpar->codec_id)  {
+                    st = avf->streams[j];
+                    inner_stream_index_map[media_type] = i;
+                    cat->cur_file->streams[i].out_stream_index = j;
+                    av_log(avf, AV_LOG_INFO,
+                           "[%s] 2inner #%d with out stream #%d id 0x%x  codec_id %d \n",
+                          __func__, i, j, cat->avf->streams[i]->id, cat->avf->streams[i]->codecpar->codec_id);
+                    break;
+                }
+            }
+            if (j >= avf->nb_streams)
+                continue;
+        }
+        
+        if ((ret = copy_stream_props(st, cat->avf->streams[i])) < 0)
+                return ret;
+    }
+    return 0;
+}
+
+
 static int match_streams(AVFormatContext *avf)
 {
     ConcatContext *cat = avf->priv_data;
@@ -307,6 +358,9 @@ static int match_streams(AVFormatContext *avf)
         break;
     case MATCH_EXACT_ID:
         ret = match_streams_exact_id(avf);
+        break;
+    case MATCH_EXACT_CODEC_ID:
+        ret = match_streams_exact_codec_id(avf);
         break;
     default:
         ret = AVERROR_BUG;
@@ -544,9 +598,7 @@ static int concat_read_header(AVFormatContext *avf, AVDictionary **options)
         avf->duration = time;
         cat->seekable = 1;
     }
-
-    cat->stream_match_mode = avf->nb_streams ? MATCH_EXACT_ID :
-                                               MATCH_ONE_TO_ONE;
+    cat->stream_match_mode = MATCH_EXACT_CODEC_ID;
     if ((ret = open_file(avf, 0)) < 0)
         goto fail;
     av_bprint_finalize(&bp, NULL);
