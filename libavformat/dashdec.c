@@ -1099,6 +1099,7 @@ static int parse_manifest_adaptationset(AVFormatContext *s, const char *url,
     xmlNodePtr adaptionset_baseurl_node = NULL;
     xmlNodePtr adaptionset_segmentlist_node = NULL;
     xmlNodePtr adaptionset_supplementalproperty_node = NULL;
+    xmlNodePtr adaptionset_representation_node = NULL;
     xmlNodePtr node = NULL;
 
     node = xmlFirstElementChild(adaptionset_node);
@@ -1114,22 +1115,26 @@ static int parse_manifest_adaptationset(AVFormatContext *s, const char *url,
         } else if (!av_strcasecmp(node->name, (const char *)"SupplementalProperty")) {
             adaptionset_supplementalproperty_node = node;
         } else if (!av_strcasecmp(node->name, (const char *)"Representation")) {
-            ret = parse_manifest_representation(s, url, node,
-                                                adaptionset_node,
-                                                mpd_baseurl_node,
-                                                period_baseurl_node,
-                                                period_segmenttemplate_node,
-                                                period_segmentlist_node,
-                                                fragment_template_node,
-                                                content_component_node,
-                                                adaptionset_baseurl_node,
-                                                adaptionset_segmentlist_node,
-                                                adaptionset_supplementalproperty_node);
-            if (ret < 0) {
-                return ret;
-            }
+            adaptionset_representation_node = node;
         }
         node = xmlNextElementSibling(node);
+    }
+    
+    if (adaptionset_representation_node) {
+        ret = parse_manifest_representation(s, url, node,
+            adaptionset_node,
+            mpd_baseurl_node,
+            period_baseurl_node,
+            period_segmenttemplate_node,
+            period_segmentlist_node,
+            fragment_template_node,
+            content_component_node,
+            adaptionset_baseurl_node,
+            adaptionset_segmentlist_node,
+            adaptionset_supplementalproperty_node);
+        if (ret < 0) {
+            return ret;
+        }
     }
     return 0;
 }
