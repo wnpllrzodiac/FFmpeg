@@ -1121,7 +1121,7 @@ static int parse_manifest_adaptationset(AVFormatContext *s, const char *url,
     }
     
     if (adaptionset_representation_node) {
-        ret = parse_manifest_representation(s, url, node,
+        ret = parse_manifest_representation(s, url, adaptionset_representation_node,
             adaptionset_node,
             mpd_baseurl_node,
             period_baseurl_node,
