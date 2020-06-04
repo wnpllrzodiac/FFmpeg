@@ -302,6 +302,7 @@ OBJS-$(CONFIG_MICRODVD_MUXER)            += microdvdenc.o
 OBJS-$(CONFIG_MJPEG_2000_DEMUXER)        += rawdec.o mj2kdec.o
 OBJS-$(CONFIG_MJPEG_DEMUXER)             += rawdec.o
 OBJS-$(CONFIG_MJPEG_MUXER)               += rawenc.o
+OBJS-$(CONFIG_MK_DEMUXER)                += mkdemuxer.o
 OBJS-$(CONFIG_MK_MUXER)                  += mkmuxer.o
 OBJS-$(CONFIG_MLP_DEMUXER)               += rawdec.o mlpdec.o
 OBJS-$(CONFIG_MLP_MUXER)                 += rawenc.o

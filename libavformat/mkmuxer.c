@@ -1,5 +1,5 @@
 /*
- * mk demuxer
+ * mk muxer
  * Copyright (c) 2016 Paul B Mahol
  *
  * This file is part of FFmpeg.
@@ -23,26 +23,35 @@
  
 static int mk_write_header(AVFormatContext *s)
 {
-    const char *header = "hello123";
+    const char *header = "HELLO123";
+    int width = 1280;
+    int height = 720;
+    int fps = 25;
+    
     avio_write(s->pb, header, strlen(header));
+    avio_write(s->pb, &width, sizeof(width));
+    avio_write(s->pb, &height, sizeof(height));
+    avio_write(s->pb, &fps, sizeof(fps));
+    
     return 0;
 }
  
 static int mk_write_packet(AVFormatContext *s, AVPacket *pkt)
 {
+    avio_write(s->pb, &pkt->size, sizeof(pkt->size));
     avio_write(s->pb, pkt->data, pkt->size);
     return 0;
 }
  
 static int mk_write_end(AVFormatContext *s)
 {
-    const char *trailer = "bye456";
+    const char *trailer = "BYE456";
     avio_write(s->pb, trailer, strlen(trailer));
     return 0;
 }
 
 AVOutputFormat ff_mk_muxer = {
-    .name           = "mpegts",
+    .name           = "mk",
     .long_name      = NULL_IF_CONFIG_SMALL("mk (MK Video Container)"),
     .mime_type      = "mkvideo/x-msvideo",
     .extensions     = "mk",

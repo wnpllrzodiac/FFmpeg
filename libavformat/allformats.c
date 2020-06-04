@@ -232,6 +232,7 @@ extern AVInputFormat  ff_mjpeg_demuxer;
 extern AVOutputFormat ff_mjpeg_muxer;
 extern AVInputFormat  ff_mjpeg_2000_demuxer;
 extern AVOutputFormat ff_mk_muxer;
+extern AVInputFormat  ff_mk_demuxer;
 extern AVInputFormat  ff_mlp_demuxer;
 extern AVOutputFormat ff_mlp_muxer;
 extern AVInputFormat  ff_mlv_demuxer;
