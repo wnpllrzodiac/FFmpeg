@@ -49,69 +49,101 @@ static int mkvideo_probe(const AVProbeData *p)
 
 static int mkvideo_read_header(AVFormatContext *ctx)
 {
-    int ret;
     MKVideoDemuxerContext *s = ctx->priv_data;
     enum AVPixelFormat pix_fmt;
     AVStream *st;
 
-    char buf[64] = {0};
-    int width, height, fps;
-    ret = avio_read(ctx->pb, buf, 8);
-    if (ret != 8) {
-        av_log(s, AV_LOG_ERROR, "mark not enough\n");
+    int width, height, bitrate, fps, av_flags;
+    int has_video, has_audio;
+    
+    if (avio_skip(ctx->pb, 8) < 0) {
+        av_log(s, AV_LOG_ERROR, "failed to skip mark 8\n");
         return -1;
     }
     
-    avio_read(ctx->pb, (unsigned char *)&width, sizeof(width));
-    avio_read(ctx->pb, (unsigned char *)&height, sizeof(height));
-    avio_read(ctx->pb, (unsigned char *)&fps, sizeof(fps));
+    av_flags = avio_r8(ctx->pb);
+    has_video = av_flags & 0x1;
+    has_audio = (av_flags & 0x2) >> 1;
+    av_log(s, AV_LOG_ERROR, "has video: %d, has audio: %d\n", has_video, has_audio);
     
-    av_log(s, AV_LOG_ERROR, "res: %d x %d, fps: %d\n", width, height, fps);
+    width = avio_rb16(ctx->pb);
+    height = avio_rb16(ctx->pb);
+    bitrate = avio_rb16(ctx->pb);
+    fps = avio_rb16(ctx->pb);
     
-    st = avformat_new_stream(ctx, NULL);
-    if (!st)
-        return AVERROR(ENOMEM);
-
-    st->codec->codec_type = AVMEDIA_TYPE_VIDEO;
-
-    st->codec->codec_id = AV_CODEC_ID_H264;
-
-    pix_fmt = AV_PIX_FMT_YUV420P;
-
-    st->time_base.num = s->framerate.den;
-    st->time_base.den = s->framerate.num;
-    st->pts_wrap_bits = 64;
-
-
-    st->codec->width  = s->width;
-    st->codec->height = s->height;
-    st->codec->pix_fmt = pix_fmt;
-
-    AVRational tmpRa;
-    tmpRa.den = 1;
-    tmpRa.num = 8;
-    st->codec->bit_rate = av_rescale_q(avpicture_get_size(st->codec->pix_fmt, s->width, s->height),
-        tmpRa, st->time_base);
+    if (has_video) {
+        ctx->nb_streams++;
         
+        av_log(s, AV_LOG_ERROR, "res: %d x %d, bitrate: %d kb, fps: %d\n", width, height, bitrate / 1000, fps);
+    
+        st = avformat_new_stream(ctx, NULL);
+        if (!st)
+            return AVERROR(ENOMEM);
+
+        st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+        st->codecpar->codec_id = AV_CODEC_ID_H264;
+
+        pix_fmt = AV_PIX_FMT_YUV420P;
+
+        //st->time_base.num = s->framerate.den;
+        //st->time_base.den = s->framerate.num;
+        //st->pts_wrap_bits = 64;
+        
+        st->codecpar->width  = width;
+        st->codecpar->height = height;
+        st->codecpar->format = pix_fmt;
+        
+        st->codecpar->bit_rate = bitrate;
+        
+        ctx->streams[0] = st;
+    }
+    if (has_audio) {
+        ctx->nb_streams++;
+        
+        st = avformat_new_stream(ctx, NULL);
+        if (!st)
+            return AVERROR(ENOMEM);
+
+        st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+        st->codecpar->codec_id = AV_CODEC_ID_AAC;
+        st->codecpar->channels = 2;
+        st->codecpar->sample_rate = 44100;
+        
+        ctx->streams[1] = st;
+    }
+    
+    ctx->bit_rate = bitrate;
+    ctx->duration = av_rescale(20000, 1000, AV_TIME_BASE);
+    
     return 0;
 }
  
 static int mkvideo_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
-    int packet_size, ret, width, height;
-    AVStream *st = s->streams[0];
-
-    width = st->codecpar->width;
-    height = st->codecpar->height;
-
-    avio_read(s->pb, (unsigned char *)&packet_size, sizeof(packet_size));
-    if (packet_size < 0)
-        return -1;
-
-    av_log(s, AV_LOG_INFO, "packet size: %d\n", packet_size);
+    int packet_size, ret, type;
+    
+    if (avio_feof(s->pb))
+        return AVERROR_EOF;
+    
+    type = avio_r8(s->pb);
+    if (type == 0) {
+        return AVERROR_EOF;
+    }
+    
+    packet_size = avio_rb32(s->pb);
+    pkt->pts = avio_rb64(s->pb);
+    pkt->dts = avio_rb64(s->pb);
+    
+    av_log(s, AV_LOG_INFO, "packet size: %d, pts %" PRId64", dts %" PRId64"\n", packet_size, pkt->pts, pkt->dts);
+    
     ret = av_get_packet(s->pb, pkt, packet_size);
-    pkt->pts = pkt->dts = pkt->pos / packet_size;
 
+    if (pkt->size >= 64) {
+        for (int i=0;i<64;i++) {
+            pkt->data[i] ^= 0x34; 
+        }
+    }
+    
     pkt->stream_index = 0;
     if (ret < 0)
         return ret;
