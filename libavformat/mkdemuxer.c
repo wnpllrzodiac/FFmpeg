@@ -62,9 +62,9 @@ static int mkvideo_read_header(AVFormatContext *ctx)
         return -1;
     }
     
-    avio_read(ctx->pb, &width, sizeof(width));
-    avio_read(ctx->pb, &height, sizeof(height));
-    avio_read(ctx->pb, &fps, sizeof(fps));
+    avio_read(ctx->pb, (unsigned char *)&width, sizeof(width));
+    avio_read(ctx->pb, (unsigned char *)&height, sizeof(height));
+    avio_read(ctx->pb, (unsigned char *)&fps, sizeof(fps));
     
     av_log(s, AV_LOG_ERROR, "res: %d x %d, fps: %d\n", width, height, fps);
     
@@ -104,7 +104,7 @@ static int mkvideo_read_packet(AVFormatContext *s, AVPacket *pkt)
     width = st->codecpar->width;
     height = st->codecpar->height;
 
-    avio_read(s->pb, &packet_size, sizeof(packet_size));
+    avio_read(s->pb, (unsigned char *)&packet_size, sizeof(packet_size));
     if (packet_size < 0)
         return -1;
 

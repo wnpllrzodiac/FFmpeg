@@ -23,22 +23,27 @@
  
 static int mk_write_header(AVFormatContext *s)
 {
-    const char *header = "HELLO123";
+    unsigned char header[8] = {0};
     int width = 1280;
     int height = 720;
     int fps = 25;
     
-    avio_write(s->pb, header, strlen(header));
-    avio_write(s->pb, &width, sizeof(width));
-    avio_write(s->pb, &height, sizeof(height));
-    avio_write(s->pb, &fps, sizeof(fps));
+    strcpy(header, "HELLO");
+    header[5] = 1;
+    header[6] = 2;
+    header[7] = 3;
+    
+    avio_write(s->pb, header, 8);
+    avio_write(s->pb, (unsigned char *)&width, sizeof(width));
+    avio_write(s->pb, (unsigned char *)&height, sizeof(height));
+    avio_write(s->pb, (unsigned char *)&fps, sizeof(fps));
     
     return 0;
 }
  
 static int mk_write_packet(AVFormatContext *s, AVPacket *pkt)
 {
-    avio_write(s->pb, &pkt->size, sizeof(pkt->size));
+    avio_write(s->pb, (unsigned char *)&pkt->size, sizeof(pkt->size));
     avio_write(s->pb, pkt->data, pkt->size);
     return 0;
 }
