@@ -50,10 +50,11 @@ static int mkvideo_probe(const AVProbeData *p)
 static int mkvideo_read_header(AVFormatContext *ctx)
 {
     MKVideoDemuxerContext *s = ctx->priv_data;
-    enum AVPixelFormat pix_fmt;
     AVStream *st;
 
-    int width, height, bitrate, fps, av_flags;
+    int width, height, bitrate, fps;
+    int av_flags;
+    int channels, sample_rate;
     int has_video, has_audio;
     
     if (avio_skip(ctx->pb, 8) < 0) {
@@ -71,10 +72,11 @@ static int mkvideo_read_header(AVFormatContext *ctx)
     bitrate = avio_rb16(ctx->pb);
     fps = avio_rb16(ctx->pb);
     
+    channels = avio_r8(ctx->pb);
+    sample_rate = avio_rb16(ctx->pb);
+    
     if (has_video) {
-        ctx->nb_streams++;
-        
-        av_log(s, AV_LOG_ERROR, "res: %d x %d, bitrate: %d kb, fps: %d\n", width, height, bitrate / 1000, fps);
+        av_log(s, AV_LOG_ERROR, "res: %d x %d, bitrate: %d kb, fps: %d\n", width, height, bitrate, fps);
     
         st = avformat_new_stream(ctx, NULL);
         if (!st)
@@ -83,22 +85,21 @@ static int mkvideo_read_header(AVFormatContext *ctx)
         st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
         st->codecpar->codec_id = AV_CODEC_ID_H264;
 
-        pix_fmt = AV_PIX_FMT_YUV420P;
-
-        //st->time_base.num = s->framerate.den;
-        //st->time_base.den = s->framerate.num;
-        //st->pts_wrap_bits = 64;
+        st->time_base.num = 1;
+        st->time_base.den = 1000;
         
         st->codecpar->width  = width;
         st->codecpar->height = height;
-        st->codecpar->format = pix_fmt;
+        st->codecpar->format = (int)AV_PIX_FMT_YUV420P; // AVPixelFormat
         
-        st->codecpar->bit_rate = bitrate;
+        st->codecpar->bit_rate = bitrate * 1000;
         
-        ctx->streams[0] = st;
+        st->r_frame_rate = av_make_q(fps, 1);
+        
+        //st->need_parsing = AVSTREAM_PARSE_HEADERS;
     }
     if (has_audio) {
-        ctx->nb_streams++;
+        av_log(s, AV_LOG_ERROR, "channels: %d, sample_rate %d\n", channels, sample_rate);
         
         st = avformat_new_stream(ctx, NULL);
         if (!st)
@@ -106,14 +107,12 @@ static int mkvideo_read_header(AVFormatContext *ctx)
 
         st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
         st->codecpar->codec_id = AV_CODEC_ID_AAC;
-        st->codecpar->channels = 2;
-        st->codecpar->sample_rate = 44100;
-        
-        ctx->streams[1] = st;
+        st->codecpar->channels = channels;
+        st->codecpar->sample_rate = sample_rate;
     }
     
-    ctx->bit_rate = bitrate;
-    ctx->duration = av_rescale(20000, 1000, AV_TIME_BASE);
+    ctx->bit_rate = bitrate * 1000;
+    ctx->duration = av_rescale_q(20000, av_make_q(1, 1000), AV_TIME_BASE_Q);
     
     return 0;
 }
@@ -134,7 +133,7 @@ static int mkvideo_read_packet(AVFormatContext *s, AVPacket *pkt)
     pkt->pts = avio_rb64(s->pb);
     pkt->dts = avio_rb64(s->pb);
     
-    av_log(s, AV_LOG_INFO, "packet size: %d, pts %" PRId64", dts %" PRId64"\n", packet_size, pkt->pts, pkt->dts);
+    //av_log(s, AV_LOG_INFO, "packet size: %d, pts %" PRId64", dts %" PRId64"\n", packet_size, pkt->pts, pkt->dts);
     
     ret = av_get_packet(s->pb, pkt, packet_size);
 

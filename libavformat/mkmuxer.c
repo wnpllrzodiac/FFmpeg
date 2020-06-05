@@ -31,6 +31,9 @@ typedef struct MKContext {
     int     height;
     int     v_br;
     int     fps;
+    
+    int     channels;
+    int     sample_rate;
 } MKContext;
 
 static int mk_init(struct AVFormatContext *s)
@@ -52,6 +55,8 @@ static int mk_init(struct AVFormatContext *s)
         }
         else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
             mk->audio_strm_index = i;
+            mk->channels = stream->codecpar->channels;
+            mk->sample_rate = stream->codecpar->sample_rate;
         }
     }
     
@@ -87,8 +92,11 @@ static int mk_write_header(AVFormatContext *s)
     
     avio_wb16(pb, mk->width);
     avio_wb16(pb, mk->height);
-    avio_wb16(pb, mk->v_br);
+    avio_wb16(pb, mk->v_br / 1000);
     avio_wb16(pb, mk->fps);
+    
+    avio_w8(pb, mk->channels);
+    avio_wb16(pb, mk->sample_rate);
     
     return 0;
 }
@@ -123,7 +131,7 @@ static int mk_write_packet(AVFormatContext *s, AVPacket *pkt)
     avio_wb64(s->pb, pkt->dts);
     avio_write(s->pb, pkt->data, pkt->size);
     
-    av_log(s, AV_LOG_ERROR, "write pkt: %d (%" PRId64" %" PRId64")\n", pkt->size, pts, dts);
+    //av_log(s, AV_LOG_ERROR, "write pkt: %d (%" PRId64" %" PRId64")\n", pkt->size, pts, dts);
     
     return 0;
 }
