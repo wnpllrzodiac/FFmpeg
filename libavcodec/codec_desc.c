@@ -84,6 +84,13 @@ static const AVCodecDescriptor codec_descriptors[] = {
         .profiles  = NULL_IF_CONFIG_SMALL(ff_mjpeg_profiles),
     },
     {
+        .id        = AV_CODEC_ID_MKVIDEO,
+        .type      = AVMEDIA_TYPE_VIDEO,
+        .name      = "mkvideo",
+        .long_name = NULL_IF_CONFIG_SMALL("mk video"),
+        .props     = AV_CODEC_PROP_INTRA_ONLY | AV_CODEC_PROP_LOSSLESS,
+    },
+    {
         .id        = AV_CODEC_ID_MJPEGB,
         .type      = AVMEDIA_TYPE_VIDEO,
         .name      = "mjpegb",
