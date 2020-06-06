@@ -25,15 +25,18 @@ typedef struct MKContext {
     AVClass *av_class;
     int     reserved;
     
-    int     audio_strm_index;
     int     video_strm_index;
+    int     video_fmt;
     int     width;
     int     height;
     int     v_br;
     int     fps;
     
+    int     audio_strm_index;
+    int     audio_fmt;
     int     channels;
     int     sample_rate;
+    int     a_br;
 } MKContext;
 
 static int mk_init(struct AVFormatContext *s)
@@ -41,22 +44,27 @@ static int mk_init(struct AVFormatContext *s)
     AVStream *stream    = NULL;
     MKContext *mk = s->priv_data;
     
+    memset(mk, 0, sizeof(MKContext));
+    
     mk->audio_strm_index    = -1;
     mk->video_strm_index    = -1;
-    mk->fps                 = 25;
     
     for (int i=0;i<s->nb_streams;i++) {
         stream = s->streams[i];
         if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            mk->width   = stream->codecpar->width;
-            mk->height  = stream->codecpar->height;
-            mk->v_br = stream->codecpar->bit_rate;
-            mk->video_strm_index = i;
+            mk->video_strm_index    = i;
+            mk->video_fmt           = stream->codecpar->format;
+            mk->width               = stream->codecpar->width;
+            mk->height              = stream->codecpar->height;
+            mk->v_br                = stream->codecpar->bit_rate;
+            mk->fps                 = 25;
         }
         else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            mk->audio_strm_index = i;
-            mk->channels = stream->codecpar->channels;
-            mk->sample_rate = stream->codecpar->sample_rate;
+            mk->audio_strm_index    = i;
+            mk->audio_fmt           = stream->codecpar->format;
+            mk->channels            = stream->codecpar->channels;
+            mk->sample_rate         = stream->codecpar->sample_rate;
+            mk->a_br                = stream->codecpar->bit_rate;
         }
     }
     
@@ -67,6 +75,7 @@ static int mk_init(struct AVFormatContext *s)
     
     av_log(s, AV_LOG_ERROR, "video stream idx: %d, audio stream idx: %d\n", mk->video_strm_index, mk->audio_strm_index);
     av_log(s, AV_LOG_ERROR, "res: %d x %d, fps: %d, video br: %d kb\n", mk->width, mk->height, mk->fps, mk->v_br / 1000);
+    av_log(s, AV_LOG_ERROR, "channels: %d, sample_rate %d, fmt %d, bitrate: %d kb\n", mk->channels, mk->sample_rate, mk->audio_fmt, mk->a_br / 1000);
     
     return 0;
 }
@@ -90,13 +99,25 @@ static int mk_write_header(AVFormatContext *s)
     
     avio_w8(pb, av_flag);
     
+    // 8 format
+    // 16 width
+    // 16 height
+    // 16 video bitrate
+    // 8 fps
+    avio_w8(pb, mk->video_fmt);
     avio_wb16(pb, mk->width);
     avio_wb16(pb, mk->height);
     avio_wb16(pb, mk->v_br / 1000);
-    avio_wb16(pb, mk->fps);
+    avio_w8(pb, mk->fps);
     
+    // 8 format
+    // 8 channels
+    // 16 sample_rate
+    // 16 audio bitrate
+    avio_w8(pb, mk->audio_fmt);
     avio_w8(pb, mk->channels);
     avio_wb16(pb, mk->sample_rate);
+    avio_wb16(pb, mk->a_br / 1000);
     
     return 0;
 }
