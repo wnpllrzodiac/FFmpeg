@@ -2118,6 +2118,11 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                         pls->seek_timestamp = AV_NOPTS_VALUE;
                         break;
                     }
+                    if (ts_diff < -30 * tb.den && (pls->seek_flags  & AVSEEK_FLAG_ANY ||
+                                        pls->pkt.flags & AV_PKT_FLAG_KEY)) {
+                        pls->seek_timestamp = AV_NOPTS_VALUE;
+                        break;
+                    }
                 }
                 av_packet_unref(&pls->pkt);
                 reset_packet(&pls->pkt);
