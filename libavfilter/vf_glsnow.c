@@ -17,35 +17,47 @@ static const float position[12] = {
     -1.0f,  1.0f, 1.0f};
 
 static const GLchar *v_shader_source =
-    "#version 130\n"
-    "precision mediump float;\n"
     "attribute vec2 position;\n"
     "varying vec2 texCoord;\n"
     "void main(void) {\n"
     "  gl_Position = vec4(position, 0, 1);\n"
     "  vec2 _uv = position * 0.5 + 0.5;\n"
-    //"  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
     "  texCoord = _uv;\n"
+    //"  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
     "}\n";
 
 static const GLchar *f_shader_source =
-    "#version 130\n"
-    "precision mediump float;\n"
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
     "\n"
     "uniform float time;\n"
     "\n"
+    "#define _SnowflakeAmount 200\n"
+    "#define _BlizardFactor 0.2\n"
+    "\n"
+    "float rnd(float x) {\n"
+    "  return fract(sin(dot(vec2(x+47.49,38.2467/(x+2.3)), vec2(12.9898, 78.233)))* (43758.5453));\n"
+    "}\n"
+    "\n"
+    "float drawCircle(vec2 uv, vec2 center, float radius) {\n"
+    "  return 1.0 - smoothstep(0.0, radius, length(uv - center));\n"
+    "}\n"
+    "\n"
     "void main() {\n"
-    //"  vec2 _uv = texCoord * 0.5 + 0.5;\n"
-    //"  vec2 uv = vec2(_uv.x, 1.0 - _uv.y);\n"
-    //"  gl_FragColor = texture2D(tex, texCoord);\n"
-    "  gl_FragColor = 0.5 + 0.5 * cos(time + 10.0 * texture2D(tex, texCoord) );\n"
+    "  gl_FragColor = texture2D(tex, texCoord);\n"
+    "\n"
+    "  float j;\n"
+    "  for (int i = 0; i < _SnowflakeAmount; i++) {\n"
+    "    j = float(i);\n"
+    "    float speed = 0.3 + rnd(cos(j)) * (0.7 + 0.5 * cos(j / (float(_SnowflakeAmount) * 0.25)));\n"
+    "    vec2 center = vec2((0.25 - texCoord.y) * _BlizardFactor + rnd(j) + 0.1 * cos(time + sin(j)), mod(sin(j) - speed * (time * 1.5 * (0.1 + _BlizardFactor)), 1.0));\n"
+    "    gl_FragColor += vec4(0.9 * drawCircle(texCoord, center, 0.001 + speed * 0.012));\n"
+    "  }\n"
     "}\n";
 
 #define PIXEL_FORMAT GL_RGB
 
-typedef struct
+    typedef struct
 {
     const AVClass *class;
     GLuint program;
@@ -54,12 +66,12 @@ typedef struct
     GLuint pos_buf;
 
     GLint time;
-} GlWaveContext;
+} GlSnowContext;
 
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
-static const AVOption glwave_options[] = {{}, {NULL}};
+static const AVOption glsnow_options[] = {{}, {NULL}};
 
-AVFILTER_DEFINE_CLASS(glwave);
+AVFILTER_DEFINE_CLASS(glsnow);
 
 static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GLenum type)
 {
@@ -88,7 +100,7 @@ static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GL
     return compileResult == GL_TRUE ? shader : 0;
 }
 
-static void vbo_setup(GlWaveContext *gs)
+static void vbo_setup(GlSnowContext *gs)
 {
     glGenBuffers(1, &gs->pos_buf);
     glBindBuffer(GL_ARRAY_BUFFER, gs->pos_buf);
@@ -102,7 +114,7 @@ static void vbo_setup(GlWaveContext *gs)
 static void tex_setup(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
-    GlWaveContext *gs = ctx->priv;
+    GlSnowContext *gs = ctx->priv;
 
     glGenTextures(1, &gs->frame_tex);
     glActiveTexture(GL_TEXTURE0);
@@ -121,7 +133,7 @@ static void tex_setup(AVFilterLink *inlink)
 static int build_program(AVFilterContext *ctx)
 {
     GLuint v_shader, f_shader;
-    GlWaveContext *gs = ctx->priv;
+    GlSnowContext *gs = ctx->priv;
 
     if (!((v_shader = build_shader(ctx, v_shader_source, GL_VERTEX_SHADER)) &&
           (f_shader = build_shader(ctx, f_shader_source, GL_FRAGMENT_SHADER))))
@@ -149,7 +161,7 @@ static av_cold int init(AVFilterContext *ctx)
 static void setup_uniforms(AVFilterLink *fromLink)
 {
     AVFilterContext *ctx = fromLink->dst;
-    GlWaveContext *gs = ctx->priv;
+    GlSnowContext *gs = ctx->priv;
 
     gs->time = glGetUniformLocation(gs->program, "time");
     glUniform1f(gs->time, 0.0f);
@@ -158,7 +170,7 @@ static void setup_uniforms(AVFilterLink *fromLink)
 static int config_props(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
-    GlWaveContext *gs = ctx->priv;
+    GlSnowContext *gs = ctx->priv;
 
     glfwWindowHint(GLFW_VISIBLE, 0);
     gs->window = glfwCreateWindow(inlink->w, inlink->h, "", NULL, NULL);
@@ -190,7 +202,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
     AVFilterLink *outlink = ctx->outputs[0];
-    GlWaveContext *gs = ctx->priv;
+    GlSnowContext *gs = ctx->priv;
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
     if (!out)
@@ -213,7 +225,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
 static av_cold void uninit(AVFilterContext *ctx)
 {
-    GlWaveContext *gs = ctx->priv;
+    GlSnowContext *gs = ctx->priv;
     glDeleteTextures(1, &gs->frame_tex);
     glDeleteProgram(gs->program);
     glDeleteBuffers(1, &gs->pos_buf);
@@ -226,24 +238,24 @@ static int query_formats(AVFilterContext *ctx)
     return ff_set_common_formats(ctx, ff_make_format_list(formats));
 }
 
-static const AVFilterPad glwave_inputs[] = {
+static const AVFilterPad glsnow_inputs[] = {
     {.name = "default",
      .type = AVMEDIA_TYPE_VIDEO,
      .config_props = config_props,
      .filter_frame = filter_frame},
     {NULL}};
 
-static const AVFilterPad glwave_outputs[] = {
+static const AVFilterPad glsnow_outputs[] = {
     {.name = "default", .type = AVMEDIA_TYPE_VIDEO}, {NULL}};
 
-AVFilter ff_vf_glwave = {
-    .name = "glwave",
-    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter wave"),
-    .priv_size = sizeof(GlWaveContext),
+AVFilter ff_vf_glsnow = {
+    .name = "glsnow",
+    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter snow"),
+    .priv_size = sizeof(GlSnowContext),
     .init = init,
     .uninit = uninit,
     .query_formats = query_formats,
-    .inputs = glwave_inputs,
-    .outputs = glwave_outputs,
-    .priv_class = &glwave_class,
+    .inputs = glsnow_inputs,
+    .outputs = glsnow_outputs,
+    .priv_class = &glsnow_class,
     .flags = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC};

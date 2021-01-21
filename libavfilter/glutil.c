@@ -7,6 +7,10 @@
 
 #include <GLFW/glfw3.h>
 
+// opengl ssh offscreen render
+// export DISPLAY=:0.0
+// refer to https://blog.csdn.net/defence006/article/details/72674612
+
 typedef GLXContext (*glXCreateContextAttribsARBProc)(
     Display *, GLXFBConfig, GLXContext, Bool, const int *);
 
