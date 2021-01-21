@@ -236,6 +236,8 @@ extern AVFilter ff_vf_frei0r;
 extern AVFilter ff_vf_fspp;
 extern AVFilter ff_vf_gblur;
 extern AVFilter ff_vf_geq;
+extern AVFilter ff_vf_glnone;
+extern AVFilter ff_vf_glwave;
 extern AVFilter ff_vf_gradfun;
 extern AVFilter ff_vf_graphmonitor;
 extern AVFilter ff_vf_greyedge;

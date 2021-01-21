@@ -1,0 +1,259 @@
+#include "libavutil/opt.h"
+#include "internal.h"
+#include "glutil.h"
+
+// --enable-gpl --enable-opengl --extra-libs='-lGLEW -lglfw'
+// export DISPLAY=:0.0
+// ffmpeg_g -i ~/work/media/astroboy.mp4 -vf glnone -c:v libx264 -b:v 512k -c:a copy -t 10 -y out.mp4
+
+#ifdef __APPLE__
+#include <OpenGL/gl3.h>
+#else
+#include <GL/glew.h>
+#include <GL/glx.h>
+#endif
+
+#include <GLFW/glfw3.h>
+
+static const float position[12] = {
+    -1.0f, -1.0f, 1.0f, 
+    -1.0f, -1.0f, 1.0f, 
+    -1.0f,  1.0f, 1.0f, 
+    -1.0f,  1.0f, 1.0f};
+
+static const GLchar *v_shader_source =
+    "attribute vec2 position;\n"
+    "varying vec2 texCoord;\n"
+    "void main(void) {\n"
+    "  gl_Position = vec4(position, 0, 1);\n"
+    "  texCoord = position;\n"
+    "}\n";
+
+static const GLchar *f_shader_source =
+    "uniform sampler2D tex;\n"
+    "varying vec2 texCoord;\n"
+    "void main() {\n"
+    "  gl_FragColor = texture2D(tex, texCoord * 0.5 + 0.5);\n"
+    "}\n";
+
+#define PIXEL_FORMAT GL_RGB
+
+typedef struct
+{
+    const AVClass *class;
+    GLuint program;
+    GLuint frame_tex;
+    GLFWwindow *window;
+    GLuint pos_buf;
+} GlNoneContext;
+
+#define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
+static const AVOption glnone_options[] = {{}, {NULL}};
+
+AVFILTER_DEFINE_CLASS(glnone);
+
+static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GLenum type)
+{
+    GLuint shader = glCreateShader(type);
+    if (!shader || !glIsShader(shader))
+    {
+        return 0;
+    }
+    glShaderSource(shader, 1, &shader_source, 0);
+    glCompileShader(shader);
+    GLint status;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
+    return status == GL_TRUE ? shader : 0;
+}
+
+static void vbo_setup(GlNoneContext *gs)
+{
+    glGenBuffers(1, &gs->pos_buf);
+    glBindBuffer(GL_ARRAY_BUFFER, gs->pos_buf);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(position), position, GL_STATIC_DRAW);
+
+    GLint loc = glGetAttribLocation(gs->program, "position");
+    glEnableVertexAttribArray(loc);
+    glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
+}
+
+static void tex_setup(AVFilterLink *inlink)
+{
+    AVFilterContext *ctx = inlink->dst;
+    GlNoneContext *gs = ctx->priv;
+
+    glGenTextures(1, &gs->frame_tex);
+    glActiveTexture(GL_TEXTURE0);
+
+    glBindTexture(GL_TEXTURE_2D, gs->frame_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+
+    glUniform1i(glGetUniformLocation(gs->program, "tex"), 0);
+}
+
+static int build_program(AVFilterContext *ctx)
+{
+    GLuint v_shader, f_shader;
+    GlNoneContext *gs = ctx->priv;
+
+    if (!((v_shader = build_shader(ctx, v_shader_source, GL_VERTEX_SHADER)) &&
+          (f_shader = build_shader(ctx, f_shader_source, GL_FRAGMENT_SHADER))))
+    {
+        return -1;
+    }
+
+    gs->program = glCreateProgram();
+    glAttachShader(gs->program, v_shader);
+    glAttachShader(gs->program, f_shader);
+    glLinkProgram(gs->program);
+
+    GLint status;
+    glGetProgramiv(gs->program, GL_LINK_STATUS, &status);
+    return status == GL_TRUE ? 0 : -1;
+}
+
+/*
+typedef GLXContext (*glXCreateContextAttribsARBProc)(
+    Display *, GLXFBConfig, GLXContext, Bool, const int *);
+
+#define NUM 1
+
+static int no_window_init()
+{
+    glXCreateContextAttribsARBProc glXCreateContextAttribs = NULL;
+    glXCreateContextAttribs = 
+        (glXCreateContextAttribsARBProc)glXGetProcAddressARB(
+            (const GLubyte *)"glXCreateContextAttribsARB");
+
+    const char *displayName = NULL;
+    Display *display;
+    display = XOpenDisplay(displayName);
+
+    static int visualAttribs[] = {
+        GLX_SAMPLE_BUFFERS, 1, GLX_SAMPLES, 4
+    };
+    int numberOfFramebufferConfigurations = 0;
+    GLXFBConfig *fbConfigs;
+    fbConfigs = glXChooseFBConfig(
+        display, DefaultScreen(display), visualAttribs, &numberOfFramebufferConfigurations);
+
+    int context_attribs[] = {
+        GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
+        GLX_CONTEXT_MINOR_VERSION_ARB, 0,
+        GLX_CONTEXT_FLAGS_ARB, GLX_CONTEXT_DEBUG_BIT_ARB,
+        GLX_CONTEXT_PROFILE_MASK_ARB, GLX_CONTEXT_CORE_PROFILE_BIT_ARB,
+        None};
+    GLXContext glContext[NUM];
+    glContext[0] = glXCreateContextAttribs(display, fbConfigs[0], 0, 1, context_attribs);
+
+    GLXPbuffer pbuffer;
+    int pbufferAttribs[] = {
+        GLX_PBUFFER_WIDTH, 32,
+        GLX_PBUFFER_HEIGHT, 32,
+        None
+    };
+    pbuffer = glXCreatePbuffer(display, fbConfigs[0], pbufferAttribs);
+    XFree(fbConfigs);
+    XSync(display, False);
+    glXMakeContextCurrent(display, pbuffer, pbuffer, glContext[0]);
+
+    return 0;
+}*/
+
+static av_cold int init(AVFilterContext *ctx)
+{
+    no_window_init();
+    return glfwInit() ? 0 : -1;
+}
+
+static int config_props(AVFilterLink *inlink)
+{
+    AVFilterContext *ctx = inlink->dst;
+    GlNoneContext *gs = ctx->priv;
+
+    glfwWindowHint(GLFW_VISIBLE, 0);
+    gs->window = glfwCreateWindow(inlink->w, inlink->h, "", NULL, NULL);
+
+    glfwMakeContextCurrent(gs->window);
+
+#ifndef __APPLE__
+    glewExperimental = GL_TRUE;
+    glewInit();
+#endif
+
+    glViewport(0, 0, inlink->w, inlink->h);
+
+    int ret;
+    if ((ret = build_program(ctx)) < 0)
+    {
+        return ret;
+    }
+
+    glUseProgram(gs->program);
+    vbo_setup(gs);
+    tex_setup(inlink);
+    return 0;
+}
+
+static int filter_frame(AVFilterLink *inlink, AVFrame *in)
+{
+    AVFilterContext *ctx = inlink->dst;
+    AVFilterLink *outlink = ctx->outputs[0];
+
+    AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
+    if (!out)
+    {
+        av_frame_free(&in);
+        return AVERROR(ENOMEM);
+    }
+    av_frame_copy_props(out, in);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
+
+    av_frame_free(&in);
+    return ff_filter_frame(outlink, out);
+}
+
+static av_cold void uninit(AVFilterContext *ctx)
+{
+    GlNoneContext *gs = ctx->priv;
+    glDeleteTextures(1, &gs->frame_tex);
+    glDeleteProgram(gs->program);
+    glDeleteBuffers(1, &gs->pos_buf);
+    glfwDestroyWindow(gs->window);
+}
+
+static int query_formats(AVFilterContext *ctx)
+{
+    static const enum AVPixelFormat formats[] = {AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE};
+    return ff_set_common_formats(ctx, ff_make_format_list(formats));
+}
+
+static const AVFilterPad glnone_inputs[] = {
+    {.name = "default",
+     .type = AVMEDIA_TYPE_VIDEO,
+     .config_props = config_props,
+     .filter_frame = filter_frame},
+    {NULL}};
+
+static const AVFilterPad glnone_outputs[] = {
+    {.name = "default", .type = AVMEDIA_TYPE_VIDEO}, {NULL}};
+
+AVFilter ff_vf_glnone = {
+    .name = "glnone",
+    .description = NULL_IF_CONFIG_SMALL("Generic OpenGL shader filter"),
+    .priv_size = sizeof(GlNoneContext),
+    .init = init,
+    .uninit = uninit,
+    .query_formats = query_formats,
+    .inputs = glnone_inputs,
+    .outputs = glnone_outputs,
+    .priv_class = &glnone_class,
+    .flags = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC};
