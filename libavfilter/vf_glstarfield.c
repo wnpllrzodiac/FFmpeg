@@ -48,7 +48,7 @@ static const GLchar *f_shader_source =
     "#define pR(a) mat2(cos(a),sin(a),-sin(a),cos(a))\n"
     "\n"
     "void main() {\n"
-    "    gl_FragColor = texture2D(tex, texCoord);\n"
+    "    gl_FragColor = texture2D(tex, vec2(texCoord.x, 1.0 - texCoord.y));\n"
     " \n"
     "    vec2 uv  = vec2(0.5 - texCoord.x, texCoord.y) * 3.0;\n"
     "\n"
@@ -264,10 +264,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlStarFieldContext *gs = ctx->priv;
-    glDeleteTextures(1, &gs->frame_tex);
-    glDeleteProgram(gs->program);
-    glDeleteBuffers(1, &gs->pos_buf);
-    glfwDestroyWindow(gs->window);
+    if (gs->window) {
+        glDeleteTextures(1, &gs->frame_tex);
+        glDeleteProgram(gs->program);
+        glDeleteBuffers(1, &gs->pos_buf);
+        glfwDestroyWindow(gs->window);
+    }
 }
 
 static int query_formats(AVFilterContext *ctx)
@@ -288,7 +290,7 @@ static const AVFilterPad glstarfield_outputs[] = {
 
 AVFilter ff_vf_glstarfield = {
     .name = "glstarfield",
-    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter water"),
+    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter star field"),
     .priv_size = sizeof(GlStarFieldContext),
     .init = init,
     .uninit = uninit,

@@ -4,7 +4,7 @@
 
 // --enable-gpl --enable-opengl --extra-libs='-lGLEW -lglfw'
 // export DISPLAY=:0.0
-// ffmpeg_g -i ~/work/media/astroboy.mp4 -vf glnone -c:v libx264 -b:v 512k -c:a copy -t 10 -y out.mp4
+// ffmpeg_g -i ~/work/media/astroboy.mp4 -vf scale=640x480,glnone -c:v libx264 -b:v 512k -c:a copy -t 10 -y out.mp4
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -140,7 +140,7 @@ static av_cold int init(AVFilterContext *ctx)
         av_log(NULL, AV_LOG_ERROR, "open gl no window init ON\n");
         no_window_init();
     }
-    
+
     return glfwInit() ? 0 : -1;
 }
 
@@ -198,10 +198,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlNoneContext *gs = ctx->priv;
-    glDeleteTextures(1, &gs->frame_tex);
-    glDeleteProgram(gs->program);
-    glDeleteBuffers(1, &gs->pos_buf);
-    glfwDestroyWindow(gs->window);
+    if (gs->window) {
+        glDeleteTextures(1, &gs->frame_tex);
+        glDeleteProgram(gs->program);
+        glDeleteBuffers(1, &gs->pos_buf);
+        glfwDestroyWindow(gs->window);
+    }
 }
 
 static int query_formats(AVFilterContext *ctx)

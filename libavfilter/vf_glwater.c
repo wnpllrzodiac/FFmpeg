@@ -227,10 +227,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlWaterContext *gs = ctx->priv;
-    glDeleteTextures(1, &gs->frame_tex);
-    glDeleteProgram(gs->program);
-    glDeleteBuffers(1, &gs->pos_buf);
-    glfwDestroyWindow(gs->window);
+    if (gs->window) {
+        glDeleteTextures(1, &gs->frame_tex);
+        glDeleteProgram(gs->program);
+        glDeleteBuffers(1, &gs->pos_buf);
+        glfwDestroyWindow(gs->window);
+    }
 }
 
 static int query_formats(AVFilterContext *ctx)

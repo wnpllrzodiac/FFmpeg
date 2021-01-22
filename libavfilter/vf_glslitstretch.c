@@ -243,10 +243,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlSlitStretchContext *gs = ctx->priv;
-    glDeleteTextures(1, &gs->frame_tex);
-    glDeleteProgram(gs->program);
-    glDeleteBuffers(1, &gs->pos_buf);
-    glfwDestroyWindow(gs->window);
+    if (gs->window) {
+        glDeleteTextures(1, &gs->frame_tex);
+        glDeleteProgram(gs->program);
+        glDeleteBuffers(1, &gs->pos_buf);
+        glfwDestroyWindow(gs->window);
+    }
 }
 
 static int query_formats(AVFilterContext *ctx)
@@ -267,7 +269,7 @@ static const AVFilterPad glslitstretch_outputs[] = {
 
 AVFilter ff_vf_glslitstretch = {
     .name = "glslitstretch",
-    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter water"),
+    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter slit stretch"),
     .priv_size = sizeof(GlSlitStretchContext),
     .init = init,
     .uninit = uninit,
