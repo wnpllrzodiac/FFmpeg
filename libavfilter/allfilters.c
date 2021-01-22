@@ -246,6 +246,7 @@ extern AVFilter ff_vf_glslitstretch;
 extern AVFilter ff_vf_glrainlight;
 extern AVFilter ff_vf_gltransition;
 extern AVFilter ff_vf_glmirror;
+extern AVFilter ff_vf_glripple;
 extern AVFilter ff_vf_gradfun;
 extern AVFilter ff_vf_graphmonitor;
 extern AVFilter ff_vf_greyedge;
