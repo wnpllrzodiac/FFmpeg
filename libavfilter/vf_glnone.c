@@ -15,25 +15,34 @@
 
 #include <GLFW/glfw3.h>
 
+/*
+2,3     5
+
+0       1,4
+*/
 static const float position[12] = {
-    -1.0f, -1.0f, 1.0f, 
-    -1.0f, -1.0f, 1.0f, 
-    -1.0f,  1.0f, 1.0f, 
-    -1.0f,  1.0f, 1.0f};
+    -1.0f, -1.0f, 
+     1.0f, -1.0f, 
+    -1.0f,  1.0f, 
+    -1.0f,  1.0f, 
+     1.0f, -1.0f,
+     1.0f,  1.0f
+};
 
 static const GLchar *v_shader_source =
     "attribute vec2 position;\n"
     "varying vec2 texCoord;\n"
     "void main(void) {\n"
     "  gl_Position = vec4(position, 0, 1);\n"
-    "  texCoord = position;\n"
+    "  vec2 _uv = position * 0.5 + 0.5;\n"
+    "  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
     "}\n";
 
 static const GLchar *f_shader_source =
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
     "void main() {\n"
-    "  gl_FragColor = texture2D(tex, texCoord * 0.5 + 0.5);\n"
+    "  gl_FragColor = texture2D(tex, texCoord);\n"
     "}\n";
 
 #define PIXEL_FORMAT GL_RGB
@@ -45,10 +54,17 @@ typedef struct
     GLuint frame_tex;
     GLFWwindow *window;
     GLuint pos_buf;
+
+    int no_window;
 } GlNoneContext;
 
+#define OFFSET(x) offsetof(GlNoneContext, x)
+
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
-static const AVOption glnone_options[] = {{}, {NULL}};
+static const AVOption glnone_options[] = {
+    {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
+    {NULL}
+};
 
 AVFILTER_DEFINE_CLASS(glnone);
 
@@ -119,7 +135,12 @@ static int build_program(AVFilterContext *ctx)
 
 static av_cold int init(AVFilterContext *ctx)
 {
-    no_window_init();
+    GlNoneContext *gs = ctx->priv;
+    if (gs->no_window) {
+        av_log(NULL, AV_LOG_ERROR, "open gl no window init ON\n");
+        no_window_init();
+    }
+    
     return glfwInit() ? 0 : -1;
 }
 

@@ -24,45 +24,69 @@ static const float position[12] = {
     1.0f, 1.0f};
 
 static const GLchar *v_shader_source =
+    //"#version 130\n"
     "attribute vec2 position;\n"
     "varying vec2 texCoord;\n"
     "void main(void) {\n"
     "  gl_Position = vec4(position, 0, 1);\n"
     "  vec2 _uv = position * 0.5 + 0.5;\n"
-    //"  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
-    "  texCoord = _uv;\n"
+    "  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
     "}\n";
 
 static const GLchar *f_shader_source =
     "#version 130\n"
     "precision mediump float;\n"
+    "\n"
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
-    "\n"
     "uniform float time;\n"
     "\n"
+    "#define t (time * 0.6)\n"
+    "#define PI 3.14159265\n"
+    "\n"
+    "#define H(P) fract(sin(dot(P,vec2(127.1,311.7)))*43758.545)\n"
+    "#define pR(a) mat2(cos(a),sin(a),-sin(a),cos(a))\n"
+    "\n"
     "void main() {\n"
-    "  float duration = 0.5;\n"
-    "  float maxAlpha = 0.4;\n"
-    "  float maxScale = 1.5;\n"
+    "    gl_FragColor = texture2D(tex, texCoord);\n"
+    " \n"
+    "    vec2 uv  = vec2(0.5 - texCoord.x, texCoord.y) * 3.0;\n"
     "\n"
-    "  float progress = mod(time, duration) / duration;\n"
-    "  float alpha = maxAlpha * (1.0 - progress);\n"
-    "  float scale = 1.0 + (maxScale - 1.0) * progress;\n"
+    "    vec3 vuv = vec3(sin(time * 0.3), 1.0, cos(time));\n"
+    "    vec3 ro = vec3(0.0, 0.0, 134.0);\n"
+    "    vec3 vrp = vec3(5.0, sin(time) * 60.0, 20.0);\n"
     "\n"
-    "  float weakX = 0.5 + (texCoord.x - 0.5) / scale;\n"
-    "  float weakY = 0.5 + (texCoord.y - 0.5) / scale;\n"
+    "    vrp.xz * pR(time);\n"
+    "    vrp.yz * pR(time * 0.2);\n"
     "\n"
-    "  vec2 weakTextureCoords = vec2(weakX, weakY);\n"
-    "  vec4 weakMask = texture2D(tex, weakTextureCoords);\n"
-    "  vec4 mask = texture2D(tex, texCoord);\n"
+    "    vec3 vpn = normalize(vrp - ro);\n"
+    "    vec3 u   = normalize(cross(vuv, vpn));\n"
+    "    vec3 rd  = normalize(vpn + uv.x * u  + uv.y * cross(vpn, u));\n"
     "\n"
-    "  gl_FragColor = mask * (1.0 - alpha) + weakMask * alpha;\n"
+    "    vec3 sceneColor = vec3(0.0, 0.0, 0.3);\n"
+    "    vec3 flareCol = vec3(0.0);\n"
+    "    float flareIntensivity = 0.0;\n"
+    "\n"
+    "    for (float k = 0.0; k < 400.0; k++) {\n"
+    "        float r = H(vec2(k)) * 2.0 - 1.0;\n"
+    "        vec3 flarePos = vec3(H(vec2(k) * r) * 20.0 - 10.0, r * 8.0, (mod(sin(k / 200.0 * PI * 4.0) * 15.0 - t * 13.0 * k * 0.007, 25.0)));\n"
+    "        float v = max(0.0, abs(dot(normalize(flarePos), rd)));\n"
+    "\n"
+    "        flareIntensivity += pow(v, 30000.0) * 4.0;\n"
+    "        flareIntensivity += pow(v, 1e2) * 0.15; \n"
+    "        flareIntensivity *= 1.0 - flarePos.z / 25.0;\n"
+    "        flareCol += vec3(flareIntensivity) * (vec3(sin(r * 3.12 - k), r, cos(k) * 2.0)) * 0.3;\n"
+    "    }\n"
+    "\n"
+    "    sceneColor += abs(flareCol);\n"
+    "    sceneColor = mix(sceneColor, sceneColor.rrr * 1.4, length(uv) / 2.0);\n"
+    "\n"
+    "    gl_FragColor += vec4(pow(sceneColor, vec3(1.1)), 1.0);\n"
     "}\n";
 
 #define PIXEL_FORMAT GL_RGB
 
-    typedef struct
+typedef struct
 {
     const AVClass *class;
     GLuint program;
@@ -72,15 +96,15 @@ static const GLchar *f_shader_source =
 
     GLint time;
     int no_window;
-} GlSoulOutContext;
+} GlStarFieldContext;
 
-#define OFFSET(x) offsetof(GlSoulOutContext, x)
+#define OFFSET(x) offsetof(GlStarFieldContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
-static const AVOption glsoulout_options[] = {
+static const AVOption glstarfield_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {NULL}};
 
-AVFILTER_DEFINE_CLASS(glsoulout);
+AVFILTER_DEFINE_CLASS(glstarfield);
 
 static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GLenum type)
 {
@@ -95,7 +119,8 @@ static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GL
 
     GLint compileResult = GL_TRUE;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &compileResult);
-    if (compileResult == GL_FALSE) {
+    if (compileResult == GL_FALSE)
+    {
         char szLog[1024] = {0};
         GLsizei logLen = 0;
         glGetShaderInfoLog(shader, 1024, &logLen, szLog);
@@ -108,7 +133,7 @@ static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GL
     return compileResult == GL_TRUE ? shader : 0;
 }
 
-static void vbo_setup(GlSoulOutContext *gs)
+static void vbo_setup(GlStarFieldContext *gs)
 {
     glGenBuffers(1, &gs->pos_buf);
     glBindBuffer(GL_ARRAY_BUFFER, gs->pos_buf);
@@ -122,7 +147,7 @@ static void vbo_setup(GlSoulOutContext *gs)
 static void tex_setup(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
-    GlSoulOutContext *gs = ctx->priv;
+    GlStarFieldContext *gs = ctx->priv;
 
     glGenTextures(1, &gs->frame_tex);
     glActiveTexture(GL_TEXTURE0);
@@ -141,7 +166,7 @@ static void tex_setup(AVFilterLink *inlink)
 static int build_program(AVFilterContext *ctx)
 {
     GLuint v_shader, f_shader;
-    GlSoulOutContext *gs = ctx->priv;
+    GlStarFieldContext *gs = ctx->priv;
 
     if (!((v_shader = build_shader(ctx, v_shader_source, GL_VERTEX_SHADER)) &&
           (f_shader = build_shader(ctx, f_shader_source, GL_FRAGMENT_SHADER))))
@@ -162,7 +187,7 @@ static int build_program(AVFilterContext *ctx)
 
 static av_cold int init(AVFilterContext *ctx)
 {
-    GlSoulOutContext *gs = ctx->priv;
+    GlStarFieldContext *gs = ctx->priv;
     if (gs->no_window) {
         av_log(NULL, AV_LOG_ERROR, "open gl no window init ON\n");
         no_window_init();
@@ -174,7 +199,7 @@ static av_cold int init(AVFilterContext *ctx)
 static void setup_uniforms(AVFilterLink *fromLink)
 {
     AVFilterContext *ctx = fromLink->dst;
-    GlSoulOutContext *gs = ctx->priv;
+    GlStarFieldContext *gs = ctx->priv;
 
     gs->time = glGetUniformLocation(gs->program, "time");
     glUniform1f(gs->time, 0.0f);
@@ -183,7 +208,7 @@ static void setup_uniforms(AVFilterLink *fromLink)
 static int config_props(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
-    GlSoulOutContext *gs = ctx->priv;
+    GlStarFieldContext *gs = ctx->priv;
 
     glfwWindowHint(GLFW_VISIBLE, 0);
     gs->window = glfwCreateWindow(inlink->w, inlink->h, "", NULL, NULL);
@@ -215,7 +240,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
     AVFilterLink *outlink = ctx->outputs[0];
-    GlSoulOutContext *gs = ctx->priv;
+    GlStarFieldContext *gs = ctx->priv;
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
     if (!out)
@@ -238,7 +263,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
 static av_cold void uninit(AVFilterContext *ctx)
 {
-    GlSoulOutContext *gs = ctx->priv;
+    GlStarFieldContext *gs = ctx->priv;
     glDeleteTextures(1, &gs->frame_tex);
     glDeleteProgram(gs->program);
     glDeleteBuffers(1, &gs->pos_buf);
@@ -251,24 +276,24 @@ static int query_formats(AVFilterContext *ctx)
     return ff_set_common_formats(ctx, ff_make_format_list(formats));
 }
 
-static const AVFilterPad glsoulout_inputs[] = {
+static const AVFilterPad glstarfield_inputs[] = {
     {.name = "default",
      .type = AVMEDIA_TYPE_VIDEO,
      .config_props = config_props,
      .filter_frame = filter_frame},
     {NULL}};
 
-static const AVFilterPad glsoulout_outputs[] = {
+static const AVFilterPad glstarfield_outputs[] = {
     {.name = "default", .type = AVMEDIA_TYPE_VIDEO}, {NULL}};
 
-AVFilter ff_vf_glsoulout = {
-    .name = "glsoulout",
-    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter soul out"),
-    .priv_size = sizeof(GlSoulOutContext),
+AVFilter ff_vf_glstarfield = {
+    .name = "glstarfield",
+    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter water"),
+    .priv_size = sizeof(GlStarFieldContext),
     .init = init,
     .uninit = uninit,
     .query_formats = query_formats,
-    .inputs = glsoulout_inputs,
-    .outputs = glsoulout_outputs,
-    .priv_class = &glsoulout_class,
+    .inputs = glstarfield_inputs,
+    .outputs = glstarfield_outputs,
+    .priv_class = &glstarfield_class,
     .flags = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC};

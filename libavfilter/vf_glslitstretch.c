@@ -24,45 +24,48 @@ static const float position[12] = {
     1.0f, 1.0f};
 
 static const GLchar *v_shader_source =
+    //"#version 130\n"
     "attribute vec2 position;\n"
     "varying vec2 texCoord;\n"
     "void main(void) {\n"
     "  gl_Position = vec4(position, 0, 1);\n"
     "  vec2 _uv = position * 0.5 + 0.5;\n"
-    //"  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
-    "  texCoord = _uv;\n"
+    "  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
     "}\n";
 
 static const GLchar *f_shader_source =
     "#version 130\n"
     "precision mediump float;\n"
+    "\n"
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
-    "\n"
     "uniform float time;\n"
     "\n"
+    "float triWave(float x) {\n"
+    "    return(abs(mod(x-10.0, 20.0)-10.0)+1.0);\n"
+    "}\n"
+    "\n"
     "void main() {\n"
-    "  float duration = 0.5;\n"
-    "  float maxAlpha = 0.4;\n"
-    "  float maxScale = 1.5;\n"
+    "    texCoord = texCoord * 2.0;\n"
     "\n"
-    "  float progress = mod(time, duration) / duration;\n"
-    "  float alpha = maxAlpha * (1.0 - progress);\n"
-    "  float scale = 1.0 + (maxScale - 1.0) * progress;\n"
+    "    vec2 uvR = texCoord * (1.0-length(texCoord)/(triWave(time*5.0)));\n"
+    "    vec2 uvG = texCoord * (1.0-length(texCoord)/(triWave(time*5.0+0.1)));\n"
+    "    vec2 uvB = texCoord * (1.0-length(texCoord)/(triWave(time*5.0+0.2)));\n"
     "\n"
-    "  float weakX = 0.5 + (texCoord.x - 0.5) / scale;\n"
-    "  float weakY = 0.5 + (texCoord.y - 0.5) / scale;\n"
+    "    uvR = uvR/2.0 + 0.5;\n"
+    "    uvG = uvG/2.0 + 0.5;\n"
+    "    uvB = uvB/2.0 + 0.5;\n"
     "\n"
-    "  vec2 weakTextureCoords = vec2(weakX, weakY);\n"
-    "  vec4 weakMask = texture2D(tex, weakTextureCoords);\n"
-    "  vec4 mask = texture2D(tex, texCoord);\n"
+    "    float R = texture2D(tex, uvR).r;\n"
+    "    float G = texture2D(tex, uvG).g;\n"
+    "    float B = texture2D(tex, uvB).b;\n"
     "\n"
-    "  gl_FragColor = mask * (1.0 - alpha) + weakMask * alpha;\n"
+    "    gl_FragColor = vec4(R, G, B, 1.0);\n"
     "}\n";
 
 #define PIXEL_FORMAT GL_RGB
 
-    typedef struct
+typedef struct
 {
     const AVClass *class;
     GLuint program;
@@ -72,15 +75,15 @@ static const GLchar *f_shader_source =
 
     GLint time;
     int no_window;
-} GlSoulOutContext;
+} GlSlitStretchContext;
 
-#define OFFSET(x) offsetof(GlSoulOutContext, x)
+#define OFFSET(x) offsetof(GlSlitStretchContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
-static const AVOption glsoulout_options[] = {
+static const AVOption glslitstretch_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {NULL}};
 
-AVFILTER_DEFINE_CLASS(glsoulout);
+AVFILTER_DEFINE_CLASS(glslitstretch);
 
 static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GLenum type)
 {
@@ -95,7 +98,8 @@ static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GL
 
     GLint compileResult = GL_TRUE;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &compileResult);
-    if (compileResult == GL_FALSE) {
+    if (compileResult == GL_FALSE)
+    {
         char szLog[1024] = {0};
         GLsizei logLen = 0;
         glGetShaderInfoLog(shader, 1024, &logLen, szLog);
@@ -108,7 +112,7 @@ static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GL
     return compileResult == GL_TRUE ? shader : 0;
 }
 
-static void vbo_setup(GlSoulOutContext *gs)
+static void vbo_setup(GlSlitStretchContext *gs)
 {
     glGenBuffers(1, &gs->pos_buf);
     glBindBuffer(GL_ARRAY_BUFFER, gs->pos_buf);
@@ -122,7 +126,7 @@ static void vbo_setup(GlSoulOutContext *gs)
 static void tex_setup(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
-    GlSoulOutContext *gs = ctx->priv;
+    GlSlitStretchContext *gs = ctx->priv;
 
     glGenTextures(1, &gs->frame_tex);
     glActiveTexture(GL_TEXTURE0);
@@ -141,7 +145,7 @@ static void tex_setup(AVFilterLink *inlink)
 static int build_program(AVFilterContext *ctx)
 {
     GLuint v_shader, f_shader;
-    GlSoulOutContext *gs = ctx->priv;
+    GlSlitStretchContext *gs = ctx->priv;
 
     if (!((v_shader = build_shader(ctx, v_shader_source, GL_VERTEX_SHADER)) &&
           (f_shader = build_shader(ctx, f_shader_source, GL_FRAGMENT_SHADER))))
@@ -162,7 +166,7 @@ static int build_program(AVFilterContext *ctx)
 
 static av_cold int init(AVFilterContext *ctx)
 {
-    GlSoulOutContext *gs = ctx->priv;
+    GlSlitStretchContext *gs = ctx->priv;
     if (gs->no_window) {
         av_log(NULL, AV_LOG_ERROR, "open gl no window init ON\n");
         no_window_init();
@@ -174,7 +178,7 @@ static av_cold int init(AVFilterContext *ctx)
 static void setup_uniforms(AVFilterLink *fromLink)
 {
     AVFilterContext *ctx = fromLink->dst;
-    GlSoulOutContext *gs = ctx->priv;
+    GlSlitStretchContext *gs = ctx->priv;
 
     gs->time = glGetUniformLocation(gs->program, "time");
     glUniform1f(gs->time, 0.0f);
@@ -183,7 +187,7 @@ static void setup_uniforms(AVFilterLink *fromLink)
 static int config_props(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
-    GlSoulOutContext *gs = ctx->priv;
+    GlSlitStretchContext *gs = ctx->priv;
 
     glfwWindowHint(GLFW_VISIBLE, 0);
     gs->window = glfwCreateWindow(inlink->w, inlink->h, "", NULL, NULL);
@@ -215,7 +219,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
     AVFilterLink *outlink = ctx->outputs[0];
-    GlSoulOutContext *gs = ctx->priv;
+    GlSlitStretchContext *gs = ctx->priv;
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
     if (!out)
@@ -238,7 +242,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
 static av_cold void uninit(AVFilterContext *ctx)
 {
-    GlSoulOutContext *gs = ctx->priv;
+    GlSlitStretchContext *gs = ctx->priv;
     glDeleteTextures(1, &gs->frame_tex);
     glDeleteProgram(gs->program);
     glDeleteBuffers(1, &gs->pos_buf);
@@ -251,24 +255,24 @@ static int query_formats(AVFilterContext *ctx)
     return ff_set_common_formats(ctx, ff_make_format_list(formats));
 }
 
-static const AVFilterPad glsoulout_inputs[] = {
+static const AVFilterPad glslitstretch_inputs[] = {
     {.name = "default",
      .type = AVMEDIA_TYPE_VIDEO,
      .config_props = config_props,
      .filter_frame = filter_frame},
     {NULL}};
 
-static const AVFilterPad glsoulout_outputs[] = {
+static const AVFilterPad glslitstretch_outputs[] = {
     {.name = "default", .type = AVMEDIA_TYPE_VIDEO}, {NULL}};
 
-AVFilter ff_vf_glsoulout = {
-    .name = "glsoulout",
-    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter soul out"),
-    .priv_size = sizeof(GlSoulOutContext),
+AVFilter ff_vf_glslitstretch = {
+    .name = "glslitstretch",
+    .description = NULL_IF_CONFIG_SMALL("OpenGL shader filter water"),
+    .priv_size = sizeof(GlSlitStretchContext),
     .init = init,
     .uninit = uninit,
     .query_formats = query_formats,
-    .inputs = glsoulout_inputs,
-    .outputs = glsoulout_outputs,
-    .priv_class = &glsoulout_class,
+    .inputs = glslitstretch_inputs,
+    .outputs = glslitstretch_outputs,
+    .priv_class = &glslitstretch_class,
     .flags = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC};

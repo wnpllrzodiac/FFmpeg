@@ -10,36 +10,38 @@
 
 #include <GLFW/glfw3.h>
 
+/*
+2,3     5
+
+0       1,4
+*/
 static const float position[12] = {
-    -1.0f, -1.0f, 1.0f, 
-    -1.0f, -1.0f, 1.0f, 
-    -1.0f,  1.0f, 1.0f, 
-    -1.0f,  1.0f, 1.0f};
+    -1.0f, -1.0f,
+    1.0f, -1.0f,
+    -1.0f, 1.0f,
+    -1.0f, 1.0f,
+    1.0f, -1.0f,
+    1.0f, 1.0f};
 
 static const GLchar *v_shader_source =
-    "#version 130\n"
-    "precision mediump float;\n"
+    //"#version 130\n"
     "attribute vec2 position;\n"
     "varying vec2 texCoord;\n"
     "void main(void) {\n"
     "  gl_Position = vec4(position, 0, 1);\n"
     "  vec2 _uv = position * 0.5 + 0.5;\n"
-    //"  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
-    "  texCoord = _uv;\n"
+    "  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
     "}\n";
 
 static const GLchar *f_shader_source =
-    "#version 130\n"
-    "precision mediump float;\n"
+    //"#version 130\n"
+    //"precision mediump float;\n"
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
     "\n"
     "uniform float time;\n"
     "\n"
     "void main() {\n"
-    //"  vec2 _uv = texCoord * 0.5 + 0.5;\n"
-    //"  vec2 uv = vec2(_uv.x, 1.0 - _uv.y);\n"
-    //"  gl_FragColor = texture2D(tex, texCoord);\n"
     "  gl_FragColor = 0.5 + 0.5 * cos(time + 10.0 * texture2D(tex, texCoord) );\n"
     "}\n";
 
@@ -54,10 +56,14 @@ typedef struct
     GLuint pos_buf;
 
     GLint time;
+    int no_window;
 } GlWaveContext;
 
+#define OFFSET(x) offsetof(GlWaveContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
-static const AVOption glwave_options[] = {{}, {NULL}};
+static const AVOption glwave_options[] = {
+    {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
+    {NULL}};
 
 AVFILTER_DEFINE_CLASS(glwave);
 
@@ -142,7 +148,13 @@ static int build_program(AVFilterContext *ctx)
 
 static av_cold int init(AVFilterContext *ctx)
 {
-    no_window_init();
+    GlWaveContext *gs = ctx->priv;
+    if (gs->no_window)
+    {
+        av_log(NULL, AV_LOG_ERROR, "open gl no window init ON\n");
+        no_window_init();
+    }
+
     return glfwInit() ? 0 : -1;
 }
 
