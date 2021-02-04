@@ -35,7 +35,8 @@ static const GLchar *v_shader_source =
     "void main(void) {\n"
     "  gl_Position = vec4(position, 0, 1);\n"
     "  vec2 _uv = position * 0.5 + 0.5;\n"
-    "  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
+    //"  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
+    "  texCoord = _uv;\n"
     "}\n";
 
 static const GLchar *f_shader_source =
@@ -54,8 +55,10 @@ typedef struct
     GLuint frame_tex;
     GLFWwindow *window;
     GLuint pos_buf;
+    GLuint pbo_ids[2];
 
     int no_window;
+    int is_pbo;
 } GlNoneContext;
 
 #define OFFSET(x) offsetof(GlNoneContext, x)
@@ -63,6 +66,7 @@ typedef struct
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption glnone_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
+    {"pbo", "use PBO mode to read image data", OFFSET(is_pbo), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {NULL}
 };
 
@@ -110,6 +114,20 @@ static void tex_setup(AVFilterLink *inlink)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
 
     glUniform1i(glGetUniformLocation(gs->program, "tex"), 0);
+}
+
+static void pbo_setup(AVFilterLink *inlink)
+{
+    AVFilterContext *ctx = inlink->dst;
+    GlNoneContext *gs = ctx->priv;
+
+    int imgByteSize = inlink->w * inlink->h * 3;//RGB
+
+    glGenBuffers(2, &gs->pbo_ids[0]);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, gs->pbo_ids[0]);
+    glBufferData(GL_PIXEL_PACK_BUFFER, imgByteSize, 0, GL_STREAM_DRAW);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, gs->pbo_ids[1]);
+    glBufferData(GL_PIXEL_PACK_BUFFER, imgByteSize, 0, GL_STREAM_DRAW);
 }
 
 static int build_program(AVFilterContext *ctx)
@@ -170,6 +188,10 @@ static int config_props(AVFilterLink *inlink)
 
     glUseProgram(gs->program);
     vbo_setup(gs);
+    if (gs->is_pbo) {
+        av_log(NULL, AV_LOG_WARNING, "enable PBO\n");
+        pbo_setup(inlink);
+    }
     tex_setup(inlink);
     return 0;
 }
@@ -177,6 +199,7 @@ static int config_props(AVFilterLink *inlink)
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
+    GlNoneContext *gs = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
@@ -189,7 +212,27 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
+
+    if (gs->is_pbo) {
+        int index = inlink->frame_count_out % 2;
+        int nextIndex = (index + 1) % 2;
+        //av_log(NULL, AV_LOG_WARNING, "%" PRId64 ", %d, %d\n", inlink->frame_count_out, index, nextIndex);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, gs->pbo_ids[index]);
+        glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, gs->pbo_ids[nextIndex]);
+        GLubyte *bufPtr = (GLubyte *)(glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                                                            outlink->w * outlink->h * 3,
+                                                            GL_MAP_READ_BIT));
+        if (bufPtr) {
+            out->data[0] = bufPtr;
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+    else {
+        glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
+    }
 
     av_frame_free(&in);
     return ff_filter_frame(outlink, out);
