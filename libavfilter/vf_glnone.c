@@ -2,7 +2,11 @@
 #include "internal.h"
 #include "glutil.h"
 
-// --enable-gpl --enable-opengl --extra-libs='-lGLEW -lglfw'
+// sudo apt install libglew-dev
+// wget https://github.com/glfw/glfw/releases/download/3.3.2/glfw-3.3.2.zip
+// sudo apt install cmake libxrandr libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+// 
+// --enable-gpl --enable-opengl --extra-libs='-lGLEW -lglfw3'
 // export DISPLAY=:0.0
 // ffmpeg_g -i ~/work/media/astroboy.mp4 -vf scale=640x480,glnone -c:v libx264 -b:v 512k -c:a copy -t 10 -y out.mp4
 
