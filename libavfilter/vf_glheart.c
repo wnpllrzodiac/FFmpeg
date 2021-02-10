@@ -10,6 +10,8 @@
 
 #include <GLFW/glfw3.h>
 
+#include <float.h> // for DBL_MAX
+
 /*
 2,3     5
 
@@ -40,6 +42,7 @@ static const GLchar *f_shader_source =
     "varying vec2 texCoord;\n"
     "\n"
     "uniform float u_time;\n"
+    "uniform float u_duration;\n"
     "uniform vec2 u_screenSize;\n"
     "uniform vec3 u_bgcolor; // vec3(1.0,0.8,0.8)\n"
     "\n"
@@ -54,7 +57,8 @@ static const GLchar *f_shader_source =
     "    vec3 bcol = u_bgcolor * (1.0-0.38*length(p));\n"
     "\n"
     "    // animate\n"
-    "    float tt = u_time;\n"
+    //"    float tt = u_time;\n"
+    "    float tt = mod(u_time,u_duration)/u_duration;"
     "    float ss = pow(tt,.2)*0.5 + 0.5;\n"
     "    ss = 1.0 + ss*0.5*sin(tt*6.2831*3.0 + p.y*0.5)*exp(-tt*4.0);\n"
     "    p *= vec2(0.5,1.5) + ss*vec2(0.5,-0.5);\n"
@@ -91,6 +95,7 @@ static const GLchar *f_shader_source =
 
     GLint time;
     int no_window;
+    double duration;
     int bg_r;
     int bg_g;
     int bg_b;
@@ -103,6 +108,7 @@ static const AVOption glheart_options[] = {
     {"r", "background color red", OFFSET(bg_r), AV_OPT_TYPE_INT, {.i64 = 255}, 0, 255, .flags = FLAGS},
     {"g", "background color green", OFFSET(bg_g), AV_OPT_TYPE_INT, {.i64 = 204}, 0, 255, .flags = FLAGS},
     {"b", "background color blue", OFFSET(bg_b), AV_OPT_TYPE_INT, {.i64 = 204}, 0, 255, .flags = FLAGS},
+    {"duration", "animation duration in seconds", OFFSET(duration), AV_OPT_TYPE_DOUBLE, {.dbl = 1.5}, 0, DBL_MAX, FLAGS},
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(glheart);
@@ -207,6 +213,8 @@ static void setup_uniforms(AVFilterLink *fromLink)
     gs->time = glGetUniformLocation(gs->program, "u_time");
     glUniform1f(gs->time, 0.0f);
 
+    glUniform1f(glGetUniformLocation(gs->program, "u_duration"), (GLfloat)gs->duration);
+
     size = glGetUniformLocation(gs->program, "u_screenSize");
     glUniform2f(size, fromLink->w, fromLink->h);
 
@@ -261,8 +269,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     av_frame_copy_props(out, in);
 
     float time = in->pts * av_q2d(inlink->time_base);
-    if (time > 3.0)
-        time -= (int)time / 3 * 3;
+    //time = static_cast<float>(fmod(time, 2000) / 2000);
     glUniform1f(gs->time, time);
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);

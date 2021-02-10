@@ -10,7 +10,9 @@
 
 #include <GLFW/glfw3.h>
 
-// -vf "glcommon=source=shader.frag:precision=highp:uniforms='u_bgcolor=vec3(1.0,0.8,0.8)'"
+// -vf "glcommon=source=libavfilter/oglfilter/heart_shader.frag:
+//   precision=highp:uniforms='u_duration=5.0&u_blur=0.06
+//    &u_heartcolor=vec3(1.0,0.5,0.3)&u_eccentricity=0.38&u_bgcolor=vec3(1.0,0.8,0.8)'"
 
 /*
 2,3     5
