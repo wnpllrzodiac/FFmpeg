@@ -33,7 +33,7 @@ static const GLchar *v_shader_source =
     "  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
     "}\n";
 
-static const GLchar *f_shader_source =
+static const GLchar *f_default_source =
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
     "uniform float ratio;\n"
@@ -49,9 +49,12 @@ typedef struct
     GLuint program;
     GLuint frame_tex;
     GLFWwindow *window;
+    GLuint pos_buf;
 
     int no_window;
-    int is_pbo;
+
+    char *source;
+    char *uniforms;
 
     GLchar *f_shader_source;
 } GlCommonContext;
@@ -65,7 +68,7 @@ static const AVOption glcommon_options[] = {
     { "uniforms", "uniform vars setting, e.g. uniforms='some_var=1.0&other_var=1&direction=vec2(0.0,1.0)'", OFFSET(uniforms), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
     {NULL}};
 
-FRAMESYNC_DEFINE_CLASS(glcommon, GlCommonContext, fs);
+AVFILTER_DEFINE_CLASS(glcommon);
 
 static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GLenum type)
 {
@@ -189,9 +192,6 @@ static int build_program(AVFilterContext *ctx)
 static av_cold int init(AVFilterContext *ctx)
 {
     GlCommonContext *gs = ctx->priv;
-    gs->fs.on_event = blend_frame;
-    gs->first_pts = AV_NOPTS_VALUE;
-
     if (gs->no_window) {
         av_log(NULL, AV_LOG_ERROR, "open gl no window init ON\n");
         no_window_init();
@@ -326,7 +326,6 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlCommonContext *gs = ctx->priv;
-    ff_framesync_uninit(&gs->fs);
 
     if (gs->window) {
         glDeleteTextures(1, &gs->frame_tex);
@@ -350,12 +349,7 @@ static const AVFilterPad glcommon_inputs[] = {
     {NULL}};
 
 static const AVFilterPad glcommon_outputs[] = {
-    {
-        .name = "default",
-        .type = AVMEDIA_TYPE_VIDEO,
-        .config_props = config_output,
-    },
-    {NULL}};
+    {.name = "default", .type = AVMEDIA_TYPE_VIDEO}, {NULL}};
 
 AVFilter ff_vf_glcommon = {
     .name = "glcommon",

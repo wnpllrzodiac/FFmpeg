@@ -8,6 +8,7 @@
 #include <GLFW/glfw3.h>
 
 #include <string.h>
+#include "glutil.h"
 
 static char *strsep(char **stringp, const char *delim) {
     char *rv = *stringp;
@@ -67,7 +68,7 @@ int no_window_init()
     return 0;
 }
 
-static StringArray_t parseQueryString (const char *str_query)  {
+StringArray_t parseQueryString (const char *str_query)  {
   StringArray_t sa;
   int offset = 0;
   int offset_seg = 0;
@@ -102,7 +103,7 @@ static StringArray_t parseQueryString (const char *str_query)  {
   return sa;
 }
 
-static int strToInt(char *to_convert, int *i) {
+int strToInt(char *to_convert, int *i) {
   char *p = to_convert;
   errno = 0;
   *i = (int) strtol(to_convert, &p, 10);
@@ -112,7 +113,7 @@ static int strToInt(char *to_convert, int *i) {
   return 1;
 }
 
-static int strToFloat(char *to_convert, float *f) {
+int strToFloat(char *to_convert, float *f) {
   char *p = to_convert;
   errno = 0;
   *f = strtof(to_convert, &p);
@@ -123,7 +124,7 @@ static int strToFloat(char *to_convert, float *f) {
 }
 
 #define STRING_SPLIT_DEFINE(type, Type) \
-static void strSplit##Type(const char *strLiteral, const char *delimiter, type *pOutputs, int len) { \
+void strSplit##Type(const char *strLiteral, const char *delimiter, type *pOutputs, int len) { \
   char *token, *str, *tofree;                                                           \
   int offset = 0;                                                                       \
   tofree = str = strdup(strLiteral);                                                    \
@@ -143,7 +144,7 @@ STRING_SPLIT_DEFINE(float, Float)
 
 //assume that the string is compact
 #define PARSE_GLSL_VECTOR(glType, typeLen, type, Type)                      \
-static int parseGlSL##Type##Vector(const char* str,type *pOutput,int *pShape){      \
+int parseGlSL##Type##Vector(const char* str,type *pOutput,int *pShape){      \
   int len = (int)strlen(str);                                               \
   int bodyPos = typeLen + 2;                                                \
   if (memcmp(str,glType, typeLen) != 0) {                                   \

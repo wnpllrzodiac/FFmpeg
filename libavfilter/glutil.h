@@ -1,6 +1,8 @@
 #ifndef _GLU_TIL_H_
 #define _GLU_TIL_H_
 
+#include <libavutil/avutil.h>
+
 int no_window_init();
 
 typedef struct {
@@ -11,5 +13,11 @@ typedef struct {
 StringArray_t parseQueryString (const char *str_query);
 int strToInt(char *to_convert, int *i);
 int strToFloat(char *to_convert, float *f);
+
+void strSplitInt(const char *strLiteral, const char *delimiter, int *pOutputs, int len);
+void strSplitFloat(const char *strLiteral, const char *delimiter, float *pOutputs, int len);
+
+int parseGlSLIntVector(const char* str,int *pOutput,int *pShape);
+int parseGlSLFloatVector(const char* str,float *pOutput,int *pShape);
 
 #endif // _GLU_TIL_H_
