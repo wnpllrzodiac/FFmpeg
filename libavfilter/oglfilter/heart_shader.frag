@@ -42,7 +42,12 @@ void main(void) {
     //vec3 hcol = vec3(1.0,0.5*r,0.3)*s;
     vec3 hcol = u_heartcolor.xyz *s;
 
+    vec4 img = texture2D(tex, texCoord);
+    
     vec3 col = mix( bcol, hcol, smoothstep( -u_blur, u_blur, d - r) ); // 0.06
+    
+    // if uniform is not used, state is unused, glGetUniformLocation(u_heartcolor) always return -1
+    //vec3 col = mix( bcol, img.xyz, smoothstep( -u_blur, u_blur, d - r) ); // 0.06
 
     gl_FragColor = vec4(col,1.0);
 }
