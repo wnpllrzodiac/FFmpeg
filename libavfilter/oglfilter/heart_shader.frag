@@ -47,6 +47,7 @@ void main(void) {
     vec3 col = mix( bcol, hcol, smoothstep( -u_blur, u_blur, d - r) ); // 0.06
     
     // if uniform is not used, state is unused, glGetUniformLocation(u_heartcolor) always return -1
+    // uniform "used state" is false
     //vec3 col = mix( bcol, img.xyz, smoothstep( -u_blur, u_blur, d - r) ); // 0.06
 
     gl_FragColor = vec4(col,1.0);
