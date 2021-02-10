@@ -33,6 +33,7 @@ static const GLchar *v_shader_source =
     "}\n";
 
 static const GLchar *f_shader_source =
+    "#version 130\n"
     "precision highp float;\n"
     "\n"
     "uniform sampler2D tex;\n"
@@ -45,11 +46,8 @@ static const GLchar *f_shader_source =
     "const float PI = 3.141592653;\n"
     "\n"
     "void main(void) {\n"
-    "    //vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
-    "    //gl_FragColor = texture2D(tex, uv);\n"
-    "\n"
     "    // move to center\n"
-    "    vec2 fragCoord = vec2(texCoord.x * u_screenSizel.x, 1.0 - texCoord.y * u_screenSize.y);\n"
+    "    vec2 fragCoord = vec2(texCoord.x * u_screenSize.x, texCoord.y * u_screenSize.y);\n"
     "    vec2 p = (2.0*fragCoord-u_screenSize.xy)/min(u_screenSize.y,u_screenSize.x);\n"
     "\n"
     "    // background color\n"
@@ -200,6 +198,12 @@ static void setup_uniforms(AVFilterLink *fromLink)
 
     gs->time = glGetUniformLocation(gs->program, "u_time");
     glUniform1f(gs->time, 0.0f);
+
+    GLuint size = glGetUniformLocation(gs->program, "u_screenSize");
+    glUniform2f(size, fromLink->w, fromLink->h);
+
+    GLuint color = glGetUniformLocation(gs->program, "u_bgcolor");
+    glUniform3f(color, 1.0f, 0.8f, 0.8f); // vec3(1.0,0.8,0.8)
 }
 
 static int config_props(AVFilterLink *inlink)
