@@ -12,7 +12,7 @@
 //   [v0][v1]gltransition=duration=0.5:offset=5:source=crosswarp.glsl:source=direc.glsl:uniforms='direction=vec2(0.0,1.0)'" 
 //   -c:v libx264 -b:v 2000k -c:a copy -t 10 -y out.mp4
 
-// gltransition=duration=0.5:offset=3:source=wd.glsl:uniforms='amplitude=30.0&speed=30.0"
+// gltransition=duration=0.5:offset=3:source=wd.glsl:uniforms='amplitude=30.0&speed=30.0'"
 
 // https://gl-transitions.com/gallery
 

@@ -3,7 +3,7 @@
 
 #include <libavutil/avutil.h>
 
-int no_window_init();
+int no_window_init(void);
 
 typedef struct {
   char **strings;

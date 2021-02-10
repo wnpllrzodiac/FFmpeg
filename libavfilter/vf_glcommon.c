@@ -10,6 +10,8 @@
 
 #include <GLFW/glfw3.h>
 
+// -vf "glcommon=source=shader.frag:precision=highp:uniforms='u_bgcolor=vec3(1.0,0.8,0.8)'"
+
 /*
 2,3     5
 
@@ -30,16 +32,27 @@ static const GLchar *v_shader_source =
     "void main(void) {\n"
     "  gl_Position = vec4(position, 0, 1);\n"
     "  vec2 _uv = position * 0.5 + 0.5;\n"
-    "  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
+    //"  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
+    "  texCoord = _uv;\n"
     "}\n";
 
-static const GLchar *f_default_source =
+static const GLchar *f_shader_template =
+    "#version 130\n"
+    "precision %s float;\n"
+    "\n"
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
-    "uniform float ratio;\n"
+    "uniform vec2 u_screenSize;\n"
+    "uniform float u_time;\n"
+    "\n%s\n";
+
+static const GLchar *f_default_frag_source =
     "void main() {\n"
     "  gl_FragColor = texture2D(tex, texCoord);\n"
     "}\n";
+
+static const GLchar *f_default_shader_precision =
+    "mediump";
 
 #define PIXEL_FORMAT GL_RGB
 
@@ -52,9 +65,13 @@ typedef struct
     GLuint pos_buf;
 
     int no_window;
+    int repeat;
 
     char *source;
+    char *precision;
     char *uniforms;
+
+    GLint time;
 
     GLchar *f_shader_source;
 } GlCommonContext;
@@ -64,7 +81,9 @@ typedef struct
 
 static const AVOption glcommon_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
+    {"repeat", "repeat render in secs", OFFSET(repeat), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {"source", "path to the gl-transition source file (defaults to basic fade)", OFFSET(source), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, CHAR_MAX, FLAGS},
+    {"precision", "precision settings: lowp, mediump, highp", OFFSET(precision), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, 16, FLAGS},
     { "uniforms", "uniform vars setting, e.g. uniforms='some_var=1.0&other_var=1&direction=vec2(0.0,1.0)'", OFFSET(uniforms), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
     {NULL}};
 
@@ -158,14 +177,16 @@ static int build_program(AVFilterContext *ctx)
         source[fsize] = 0;
     }
 
-    const char *frag_source = source ? source : f_default_source;
-    int len = strlen(frag_source);
-    gs->f_shader_source = av_calloc(len + 1, sizeof(*gs->f_shader_source));
+    const char *frag_source = source ? source : f_default_frag_source;
+    const char *prec = gs->precision ? gs->precision : f_default_shader_precision;
+    int len = strlen(f_shader_template) + strlen(frag_source) + 16/*precision*/;
+    gs->f_shader_source = av_calloc(len, sizeof(*gs->f_shader_source));
     if (!gs->f_shader_source) {
         return AVERROR(ENOMEM);
     }
 
-    strncpy(gs->f_shader_source, len * sizeof(*gs->f_shader_source), frag_source);
+    snprintf(gs->f_shader_source, len * sizeof(*gs->f_shader_source), 
+        f_shader_template, prec, frag_source);
     av_log(ctx, AV_LOG_ERROR, "\n%s\n", gs->f_shader_source);
 
     if (source) {
@@ -205,9 +226,11 @@ static void setup_uniforms(AVFilterLink *fromLink)
     AVFilterContext *ctx = fromLink->dst;
     GlCommonContext *gs = ctx->priv;
 
-    // TODO: this should be output ratio
-    GLuint ratio = glGetUniformLocation(gs->program, "ratio");
-    glUniform1f(ratio, fromLink->w / (float)fromLink->h);
+    gs->time = glGetUniformLocation(gs->program, "u_time");
+    glUniform1f(gs->time, 0.0f);
+
+    glUniform2f(glGetUniformLocation(gs->program, "u_screenSize"), 
+        (float)fromLink->w, (float)fromLink->h);
 
     if(gs->uniforms) {
         StringArray_t sa = parseQueryString(gs->uniforms);
@@ -312,6 +335,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         return AVERROR(ENOMEM);
     }
     av_frame_copy_props(out, in);
+
+    float time = in->pts * av_q2d(inlink->time_base);
+    if (gs->repeat && time > 3.0)
+        time -= (int)time / 3 * 3;
+    glUniform1f(gs->time, time);
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
     glDrawArrays(GL_TRIANGLES, 0, 6);

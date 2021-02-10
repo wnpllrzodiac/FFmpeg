@@ -26,7 +26,7 @@ typedef GLXContext (*glXCreateContextAttribsARBProc)(
 
 #define NUM 1
 
-int no_window_init()
+int no_window_init(void)
 {
     glXCreateContextAttribsARBProc glXCreateContextAttribs = NULL;
     glXCreateContextAttribs = 

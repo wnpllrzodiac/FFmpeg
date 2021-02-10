@@ -91,12 +91,18 @@ static const GLchar *f_shader_source =
 
     GLint time;
     int no_window;
+    int bg_r;
+    int bg_g;
+    int bg_b;
 } GlHeartContext;
 
 #define OFFSET(x) offsetof(GlHeartContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption glheart_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
+    {"r", "background color red", OFFSET(bg_r), AV_OPT_TYPE_INT, {.i64 = 255}, 0, 255, .flags = FLAGS},
+    {"g", "background color green", OFFSET(bg_g), AV_OPT_TYPE_INT, {.i64 = 204}, 0, 255, .flags = FLAGS},
+    {"b", "background color blue", OFFSET(bg_b), AV_OPT_TYPE_INT, {.i64 = 204}, 0, 255, .flags = FLAGS},
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(glheart);
@@ -193,17 +199,20 @@ static av_cold int init(AVFilterContext *ctx)
 
 static void setup_uniforms(AVFilterLink *fromLink)
 {
+    GLuint size, color;
+
     AVFilterContext *ctx = fromLink->dst;
     GlHeartContext *gs = ctx->priv;
 
     gs->time = glGetUniformLocation(gs->program, "u_time");
     glUniform1f(gs->time, 0.0f);
 
-    GLuint size = glGetUniformLocation(gs->program, "u_screenSize");
+    size = glGetUniformLocation(gs->program, "u_screenSize");
     glUniform2f(size, fromLink->w, fromLink->h);
 
-    GLuint color = glGetUniformLocation(gs->program, "u_bgcolor");
-    glUniform3f(color, 1.0f, 0.8f, 0.8f); // vec3(1.0,0.8,0.8)
+    // vec3(1.0,0.8,0.8)
+    color = glGetUniformLocation(gs->program, "u_bgcolor");
+    glUniform3f(color, gs->bg_r / 255.0f, gs->bg_g / 255.0f, gs->bg_b / 255.0f);
 }
 
 static int config_props(AVFilterLink *inlink)
@@ -251,7 +260,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
     av_frame_copy_props(out, in);
 
-    const float time = in->pts * av_q2d(inlink->time_base);
+    float time = in->pts * av_q2d(inlink->time_base);
+    if (time > 3.0)
+        time -= (int)time / 3 * 3;
     glUniform1f(gs->time, time);
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
