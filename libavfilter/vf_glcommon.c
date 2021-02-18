@@ -331,8 +331,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     AVFilterLink *outlink = ctx->outputs[0];
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
-    if (!out)
-    {
+    if (!out) {
         av_frame_free(&in);
         return AVERROR(ENOMEM);
     }
@@ -345,6 +344,13 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
     glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    if (out->linesize[0] != outlink->w * 3/*rgb*/) {
+        av_frame_free(&in);
+        av_log(NULL, AV_LOG_ERROR, "image has padding: linesize %d, w %d\n", 
+            out->linesize[0], outlink->w);
+        return AVERROR(ENOMEM);
+    }
 
     glReadPixels(0, 0, outlink->w, outlink->h, 
         PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
