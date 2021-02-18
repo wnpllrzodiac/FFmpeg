@@ -3,10 +3,12 @@ mat2 Rot(float a) {
     return mat2(c, -s, s, c);
 }
 
+const float PI = 3.141592653;
+
 uniform int u_type; // 0-origin, 1-six, 2-four-diag, 3-four,4-updown,5-leftright,6-frameinframe
 
 void main(){
-    //vec2 pos = Rot(3.1415926/2.0) * texCoord.xy;
+    //vec2 pos = Rot(PI/2.0) * (texCoord.xy - 0.5) + 0.5;
     /*if (pos.x <= 0.5 && pos.y<= 0.5){ //左上
         pos.x = pos.x * 2.0;
         pos.y = pos.y * 2.0;
@@ -53,6 +55,30 @@ void main(){
         } else if (pos.x > 0.5 && pos.y < 0.5){ //右下
             pos.x = 1.0 - pos.x + 0.25;
             pos.y = 1.0 - pos.y - 0.25;
+        }
+        
+        pos.y = 1.0 - pos.y;
+    }
+    else if (u_type == 2) {
+        pos = vec2(texCoord.x, 1.0 - texCoord.y);
+        vec2 p = 2.0 * pos - vec2(1.0);
+        float a = atan(p.x,p.y); // [-PI, PI]
+        if (a < -3.0 * PI / 4.0 || a >= 3.0 * PI / 4.0) { // down
+            pos = Rot(PI) * (pos - 0.5) * u_screenSize.x / u_screenSize.y + 0.5;
+            pos.y -= 0.25;
+        } else if (a < -PI / 4.0 && a >= -3.0 * PI / 4.0) { // left 
+            vec2 rotate = Rot(PI/2.0) * (pos - 0.5);
+            vec2 fix_square = vec2(rotate.x, rotate.y * u_screenSize.x / u_screenSize.y);
+            pos = fix_square + 0.5;
+            pos.y -= 0.25;
+        } else if (a < PI / 4.0 && a >= -PI / 4.0) { //  up
+            pos = (pos - 0.5) * u_screenSize.x / u_screenSize.y + 0.5;
+            pos.y -= 0.25;
+        } else if (a < 3.0 * PI / 4.0 && a >= PI / 4.0) { // right
+            vec2 rotate = Rot(-PI/2.0) * (pos - 0.5);
+            vec2 fix_square = vec2(rotate.x, rotate.y * u_screenSize.x / u_screenSize.y);
+            pos = fix_square + 0.5;
+            pos.y -= 0.25;
         }
         
         pos.y = 1.0 - pos.y;
