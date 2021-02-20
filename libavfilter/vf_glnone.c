@@ -7,8 +7,16 @@
 // sudo apt install cmake libxrandr libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 // 
 // --enable-gpl --enable-opengl --extra-libs='-lGLEW -lglfw3'
+
+// with EGL:
+// --enable-gpl --enable-opengl --extra-libs='-lGLEW -lEGL'
+
 // export DISPLAY=:0.0
 // ffmpeg_g -i ~/work/media/astroboy.mp4 -vf scale=640x480,glnone -c:v libx264 -b:v 512k -c:a copy -t 10 -y out.mp4
+
+#ifndef __APPLE__
+# define GL_TRANSITION_USING_EGL //remove this line if you don't want to use EGL
+#endif
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -17,7 +25,23 @@
 #include <GL/glx.h>
 #endif
 
-#include <GLFW/glfw3.h>
+#ifdef GL_TRANSITION_USING_EGL
+# include <EGL/egl.h>
+# include <EGL/eglext.h>
+#else
+# include <GLFW/glfw3.h>
+#endif
+
+#ifdef GL_TRANSITION_USING_EGL
+static const EGLint configAttribs[] = {
+    EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+    EGL_BLUE_SIZE, 8,
+    EGL_GREEN_SIZE, 8,
+    EGL_RED_SIZE, 8,
+    EGL_DEPTH_SIZE, 8,
+    EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+    EGL_NONE};
+#endif
 
 /*
 2,3     5
@@ -57,12 +81,20 @@ typedef struct
     const AVClass *class;
     GLuint program;
     GLuint frame_tex;
-    GLFWwindow *window;
     GLuint pos_buf;
     GLuint pbo_ids[2];
 
     int no_window;
     int is_pbo;
+
+#ifdef GL_TRANSITION_USING_EGL
+    EGLDisplay      eglDpy;
+    EGLConfig       eglCfg;
+    EGLSurface      eglSurf;
+    EGLContext      eglCtx;
+#else
+    GLFWwindow*     window;
+#endif
 } GlNoneContext;
 
 #define OFFSET(x) offsetof(GlNoneContext, x)
@@ -158,12 +190,17 @@ static int build_program(AVFilterContext *ctx)
 static av_cold int init(AVFilterContext *ctx)
 {
     GlNoneContext *gs = ctx->priv;
+    
+#ifndef GL_TRANSITION_USING_EGL
     if (gs->no_window) {
         av_log(NULL, AV_LOG_ERROR, "open gl no window init ON\n");
         no_window_init();
     }
 
     return glfwInit() ? 0 : -1;
+#endif
+
+    return 0;
 }
 
 static int config_props(AVFilterLink *inlink)
@@ -171,10 +208,53 @@ static int config_props(AVFilterLink *inlink)
     AVFilterContext *ctx = inlink->dst;
     GlNoneContext *gs = ctx->priv;
 
+#ifdef GL_TRANSITION_USING_EGL
+    //init EGL
+    // 1. Initialize EGL
+    // c->eglDpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+
+ #define MAX_DEVICES 4
+    EGLDeviceEXT eglDevs[MAX_DEVICES];
+    EGLint numDevices;
+
+    PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT =(PFNEGLQUERYDEVICESEXTPROC)
+    eglGetProcAddress("eglQueryDevicesEXT");
+
+    eglQueryDevicesEXT(MAX_DEVICES, eglDevs, &numDevices);
+
+    PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT =  (PFNEGLGETPLATFORMDISPLAYEXTPROC)
+    eglGetProcAddress("eglGetPlatformDisplayEXT");
+
+    gs->eglDpy = eglGetPlatformDisplayEXT(EGL_PLATFORM_DEVICE_EXT, eglDevs[0], 0);
+
+    EGLint major, minor;
+    eglInitialize(gs->eglDpy, &major, &minor);
+    av_log(ctx, AV_LOG_DEBUG, "%d.%d", major, minor);
+    
+    // 2. Select an appropriate configuration
+    EGLint numConfigs;
+    EGLint pbufferAttribs[] = {
+        EGL_WIDTH,
+        inlink->w,
+        EGL_HEIGHT,
+        inlink->h,
+        EGL_NONE,
+    };
+    eglChooseConfig(gs->eglDpy, configAttribs, &gs->eglCfg, 1, &numConfigs);
+    // 3. Create a surface
+    gs->eglSurf = eglCreatePbufferSurface(gs->eglDpy, gs->eglCfg, pbufferAttribs);
+    // 4. Bind the API
+    eglBindAPI(EGL_OPENGL_API);
+    // 5. Create a context and make it current
+    gs->eglCtx = eglCreateContext(gs->eglDpy, gs->eglCfg, EGL_NO_CONTEXT, NULL);
+    eglMakeCurrent(gs->eglDpy, gs->eglSurf, gs->eglSurf, gs->eglCtx);
+#else
+    //glfw
     glfwWindowHint(GLFW_VISIBLE, 0);
     gs->window = glfwCreateWindow(inlink->w, inlink->h, "", NULL, NULL);
 
     glfwMakeContextCurrent(gs->window);
+#endif
 
 #ifndef __APPLE__
     glewExperimental = GL_TRUE;
@@ -205,6 +285,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     AVFilterContext *ctx = inlink->dst;
     GlNoneContext *gs = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
+
+#ifdef GL_TRANSITION_USING_EGL
+    //eglMakeCurrent(c->eglDpy, c->eglSurf, c->eglSurf, c->eglCtx);
+#else
+    //glfwMakeContextCurrent(c->window);
+#endif
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
     if (!out)
@@ -245,12 +331,21 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlNoneContext *gs = ctx->priv;
+#ifdef GL_TRANSITION_USING_EGL
+    if (gs->eglDpy) {
+        glDeleteTextures(1, &gs->frame_tex);
+        glDeleteProgram(gs->program);
+        glDeleteBuffers(1, &gs->pos_buf);
+        eglTerminate(gs->eglDpy);
+    }
+#else
     if (gs->window) {
         glDeleteTextures(1, &gs->frame_tex);
         glDeleteProgram(gs->program);
         glDeleteBuffers(1, &gs->pos_buf);
         glfwDestroyWindow(gs->window);
     }
+#endif
 }
 
 static int query_formats(AVFilterContext *ctx)
