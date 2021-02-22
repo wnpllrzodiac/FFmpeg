@@ -20,6 +20,19 @@
 #include <float.h> // for DBL_MAX
 
 #ifdef GL_TRANSITION_USING_EGL
+#ifdef __ANDROID__
+static const EGLint configAttribs[] = {
+    EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,// very important!
+    EGL_SURFACE_TYPE,EGL_PBUFFER_BIT,//EGL_WINDOW_BIT EGL_PBUFFER_BIT we will create a pixelbuffer surface
+    EGL_RED_SIZE,   8,
+    EGL_GREEN_SIZE, 8,
+    EGL_BLUE_SIZE,  8,
+    //EGL_ALPHA_SIZE, 8,// if you need the alpha channel
+    EGL_DEPTH_SIZE, 8,// if you need the depth buffer
+    EGL_STENCIL_SIZE,8,
+    EGL_NONE
+};
+#else
 static const EGLint configAttribs[] = {
     EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
     EGL_BLUE_SIZE, 8,
@@ -28,6 +41,7 @@ static const EGLint configAttribs[] = {
     EGL_DEPTH_SIZE, 8,
     EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
     EGL_NONE};
+#endif
 #endif
 
 /*
@@ -265,7 +279,14 @@ static int config_props(AVFilterLink *inlink)
     // 1. Initialize EGL
     // c->eglDpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
 
- #define MAX_DEVICES 4
+#ifdef __ANDROID__
+    gs->eglDpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (gs->eglDpy == EGL_NO_DISPLAY) {
+        av_log(NULL, AV_LOG_ERROR, "eglGetDisplay error\n");
+        return -1;
+    }
+#else
+#define MAX_DEVICES 4
     EGLDeviceEXT eglDevs[MAX_DEVICES];
     EGLint numDevices;
 
@@ -278,6 +299,7 @@ static int config_props(AVFilterLink *inlink)
     eglGetProcAddress("eglGetPlatformDisplayEXT");
 
     gs->eglDpy = eglGetPlatformDisplayEXT(EGL_PLATFORM_DEVICE_EXT, eglDevs[0], 0);
+#endif
 
     EGLint major, minor;
     eglInitialize(gs->eglDpy, &major, &minor);
@@ -292,14 +314,66 @@ static int config_props(AVFilterLink *inlink)
         inlink->h,
         EGL_NONE,
     };
-    eglChooseConfig(gs->eglDpy, configAttribs, &gs->eglCfg, 1, &numConfigs);
+    //3.1 根据所需的参数获取符合该参数的config_size，主要是解决有些手机eglChooseConfig失败的兼容性问题
+    if (!eglChooseConfig(gs->eglDpy, configAttribs, &gs->eglCfg, 1, &numConfigs)) {
+        av_log(NULL, AV_LOG_ERROR, "eglChooseConfig error\n");
+        return -1;
+    }
+#ifdef __ANDROID__
+    //3.2 根据获取到的config_size得到eglConfig
+    av_log(NULL, AV_LOG_ERROR, "numConfigs: %d\n", numConfigs);
+    if (!eglChooseConfig(gs->eglDpy, configAttribs, &gs->eglCfg, numConfigs, &numConfigs)) {
+        av_log(NULL, AV_LOG_ERROR, "eglChooseConfig error\n");
+        return -1;
+    }
+#endif
     // 3. Create a surface
     gs->eglSurf = eglCreatePbufferSurface(gs->eglDpy, gs->eglCfg, pbufferAttribs);
+    if(gs->eglSurf == EGL_NO_SURFACE) {
+        switch(eglGetError())
+        {
+            case EGL_BAD_ALLOC:
+                // Not enough resources available. Handle and recover
+                av_log(NULL, AV_LOG_ERROR, "Not enough resources available\n");
+                break;
+            case EGL_BAD_CONFIG:
+                // Verify that provided EGLConfig is valid
+                av_log(NULL, AV_LOG_ERROR, "provided EGLConfig is invalid\n");
+                break;
+            case EGL_BAD_PARAMETER:
+                // Verify that the EGL_WIDTH and EGL_HEIGHT are
+                // non-negative values
+                av_log(NULL, AV_LOG_ERROR, "provided EGL_WIDTH and EGL_HEIGHT is invalid\n");
+                break;
+            case EGL_BAD_MATCH:
+                // Check window and EGLConfig attributes to determine
+                // compatibility and pbuffer-texture parameters
+                av_log(NULL, AV_LOG_ERROR, "Check window and EGLConfig attributes\n");
+                break;
+        }
+
+        return -1;
+    }
     // 4. Bind the API
     eglBindAPI(EGL_OPENGL_API);
     // 5. Create a context and make it current
+#ifdef __ANDROID__
+    const EGLint attrib_ctx_list[] = {
+            EGL_CONTEXT_CLIENT_VERSION, 3,
+            EGL_NONE
+    };
+    gs->eglCtx = eglCreateContext(gs->eglDpy, gs->eglCfg, NULL, attrib_ctx_list);
+#else
     gs->eglCtx = eglCreateContext(gs->eglDpy, gs->eglCfg, EGL_NO_CONTEXT, NULL);
-    eglMakeCurrent(gs->eglDpy, gs->eglSurf, gs->eglSurf, gs->eglCtx);
+#endif
+    if (gs->eglCtx == EGL_NO_CONTEXT) {
+        av_log(NULL, AV_LOG_ERROR, "eglCreateContext  error\n");
+        return -1;
+    }
+    if (!eglMakeCurrent(gs->eglDpy, gs->eglSurf, gs->eglSurf, gs->eglCtx)) {
+        av_log(NULL, AV_LOG_ERROR, "eglMakeCurrent  error\n");
+        return -1;
+    }
 #else
     //glfw
     glfwWindowHint(GLFW_VISIBLE, 0);
