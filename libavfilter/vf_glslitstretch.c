@@ -8,7 +8,23 @@
 #include <GL/glew.h>
 #endif
 
-#include <GLFW/glfw3.h>
+#ifdef GL_TRANSITION_USING_EGL
+# include <EGL/egl.h>
+# include <EGL/eglext.h>
+#else
+# include <GLFW/glfw3.h>
+#endif
+
+#ifdef GL_TRANSITION_USING_EGL
+static const EGLint configAttribs[] = {
+    EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+    EGL_BLUE_SIZE, 8,
+    EGL_GREEN_SIZE, 8,
+    EGL_RED_SIZE, 8,
+    EGL_DEPTH_SIZE, 8,
+    EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+    EGL_NONE};
+#endif
 
 /*
 2,3     5
@@ -70,11 +86,19 @@ typedef struct
     const AVClass *class;
     GLuint program;
     GLuint frame_tex;
-    GLFWwindow *window;
     GLuint pos_buf;
 
     GLint time;
     int no_window;
+
+#ifdef GL_TRANSITION_USING_EGL
+    EGLDisplay      eglDpy;
+    EGLConfig       eglCfg;
+    EGLSurface      eglSurf;
+    EGLContext      eglCtx;
+#else
+    GLFWwindow*     window;
+#endif
 } GlSlitStretchContext;
 
 #define OFFSET(x) offsetof(GlSlitStretchContext, x)
@@ -167,12 +191,18 @@ static int build_program(AVFilterContext *ctx)
 static av_cold int init(AVFilterContext *ctx)
 {
     GlSlitStretchContext *gs = ctx->priv;
-    if (gs->no_window) {
+    
+#ifndef GL_TRANSITION_USING_EGL
+    if (gs->no_window)
+    {
         av_log(NULL, AV_LOG_ERROR, "open gl no window init ON\n");
         no_window_init();
     }
 
     return glfwInit() ? 0 : -1;
+#endif
+
+    return 0;
 }
 
 static void setup_uniforms(AVFilterLink *fromLink)
@@ -189,12 +219,55 @@ static int config_props(AVFilterLink *inlink)
     AVFilterContext *ctx = inlink->dst;
     GlSlitStretchContext *gs = ctx->priv;
 
+#ifdef GL_TRANSITION_USING_EGL
+    //init EGL
+    // 1. Initialize EGL
+    // c->eglDpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+
+ #define MAX_DEVICES 4
+    EGLDeviceEXT eglDevs[MAX_DEVICES];
+    EGLint numDevices;
+
+    PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT =(PFNEGLQUERYDEVICESEXTPROC)
+    eglGetProcAddress("eglQueryDevicesEXT");
+
+    eglQueryDevicesEXT(MAX_DEVICES, eglDevs, &numDevices);
+
+    PFNEGLGETPLATFORMDISPLAYEXTPROC eglGetPlatformDisplayEXT =  (PFNEGLGETPLATFORMDISPLAYEXTPROC)
+    eglGetProcAddress("eglGetPlatformDisplayEXT");
+
+    gs->eglDpy = eglGetPlatformDisplayEXT(EGL_PLATFORM_DEVICE_EXT, eglDevs[0], 0);
+
+    EGLint major, minor;
+    eglInitialize(gs->eglDpy, &major, &minor);
+    av_log(ctx, AV_LOG_DEBUG, "%d.%d", major, minor);
+    
+    // 2. Select an appropriate configuration
+    EGLint numConfigs;
+    EGLint pbufferAttribs[] = {
+        EGL_WIDTH,
+        inlink->w,
+        EGL_HEIGHT,
+        inlink->h,
+        EGL_NONE,
+    };
+    eglChooseConfig(gs->eglDpy, configAttribs, &gs->eglCfg, 1, &numConfigs);
+    // 3. Create a surface
+    gs->eglSurf = eglCreatePbufferSurface(gs->eglDpy, gs->eglCfg, pbufferAttribs);
+    // 4. Bind the API
+    eglBindAPI(EGL_OPENGL_API);
+    // 5. Create a context and make it current
+    gs->eglCtx = eglCreateContext(gs->eglDpy, gs->eglCfg, EGL_NO_CONTEXT, NULL);
+    eglMakeCurrent(gs->eglDpy, gs->eglSurf, gs->eglSurf, gs->eglCtx);
+#else
+    //glfw
     glfwWindowHint(GLFW_VISIBLE, 0);
     gs->window = glfwCreateWindow(inlink->w, inlink->h, "", NULL, NULL);
 
     glfwMakeContextCurrent(gs->window);
+#endif
 
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__ANDROID__)
     glewExperimental = GL_TRUE;
     glewInit();
 #endif
@@ -243,12 +316,22 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlSlitStretchContext *gs = ctx->priv;
+
+#ifdef GL_TRANSITION_USING_EGL
+    if (gs->eglDpy) {
+        glDeleteTextures(1, &gs->frame_tex);
+        glDeleteProgram(gs->program);
+        glDeleteBuffers(1, &gs->pos_buf);
+        eglTerminate(gs->eglDpy);
+    }
+#else
     if (gs->window) {
         glDeleteTextures(1, &gs->frame_tex);
         glDeleteProgram(gs->program);
         glDeleteBuffers(1, &gs->pos_buf);
         glfwDestroyWindow(gs->window);
     }
+#endif
 }
 
 static int query_formats(AVFilterContext *ctx)

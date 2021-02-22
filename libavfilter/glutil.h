@@ -1,6 +1,10 @@
 #ifndef _GL_UTIL_H_
 #define _GL_UTIL_H_
 
+#ifndef __APPLE__
+# define GL_TRANSITION_USING_EGL //remove this line if you don't want to use EGL
+#endif
+
 #include <libavutil/avutil.h>
 
 #ifdef __ANDROID__

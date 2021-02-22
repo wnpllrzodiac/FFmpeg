@@ -14,10 +14,6 @@
 // export DISPLAY=:0.0
 // ffmpeg_g -i ~/work/media/astroboy.mp4 -vf scale=640x480,glnone -c:v libx264 -b:v 512k -c:a copy -t 10 -y out.mp4
 
-#ifndef __APPLE__
-# define GL_TRANSITION_USING_EGL //remove this line if you don't want to use EGL
-#endif
-
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
 #else
