@@ -21,7 +21,9 @@
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
 #else
+#ifndef __ANDROID__
 #include <GL/glew.h>
+#endif
 #endif
 
 #ifdef GL_TRANSITION_USING_EGL
