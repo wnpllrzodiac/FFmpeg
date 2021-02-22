@@ -45,5 +45,5 @@ void main(){
     
     pos.y = 1.0 - pos.y;
     
-    vFragColor = texture(tex, pos);
+    gl_FragColor = texture2D(tex, pos);
 }

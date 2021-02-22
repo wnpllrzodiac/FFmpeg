@@ -60,17 +60,9 @@ static const float position[12] = {
     1.0f, 1.0f};
 
 static const GLchar *v_shader_source =
-#ifdef __ANDROID__
-    "#version 300 es\n"
-#endif
     //"#version 130\n"
-#ifdef __ANDROID__
-    "in vec2 position;\n"
-    "out vec2 texCoord;\n"
-#else
     "attribute vec2 position;\n"
     "varying vec2 texCoord;\n"
-#endif
     "void main(void) {\n"
     "  gl_Position = vec4(position, 0, 1);\n"
     "  vec2 _uv = position * 0.5 + 0.5;\n"
@@ -79,34 +71,21 @@ static const GLchar *v_shader_source =
     "}\n";
 
 static const GLchar *f_shader_template =
-#ifdef __ANDROID__
-    "#version 300 es\n"
-#else
-    "#version 130\n"
+#ifndef __ANDROID__
+    "#version 130\n" // desktop ogl must declare version before set precision
 #endif
     "precision %s float;\n"
     "\n"
     "uniform sampler2D tex;\n"
-#ifdef __ANDROID__
-    "in vec2 texCoord;\n"
-#else
     "varying vec2 texCoord;\n"
-#endif
 
     "uniform vec2 u_screenSize;\n"
     "uniform float u_time;\n"
-#ifdef __ANDROID__
-    "out vec4 vFragColor;\n"
-#endif
     "\n%s\n";
 
 static const GLchar *f_default_frag_source =
     "void main() {\n"
-#ifdef __ANDROID__
-    "  vFragColor = texture(tex, texCoord);\n"
-#else
     "  gl_FragColor = texture2D(tex, texCoord);\n"
-#endif
     "}\n";
 
 static const GLchar *f_default_shader_precision =
