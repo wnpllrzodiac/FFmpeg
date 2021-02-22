@@ -23,6 +23,8 @@ static char *strsep(char **stringp, const char *delim) {
     return rv;
 }
 
+#ifndef GL_TRANSITION_USING_EGL
+
 typedef GLXContext (*glXCreateContextAttribsARBProc)(
     Display *, GLXFBConfig, GLXContext, Bool, const int *);
 
@@ -69,6 +71,7 @@ int no_window_init(void)
 
     return 0;
 }
+#endif
 #endif
 
 StringArray_t parseQueryString (const char *str_query)  {
