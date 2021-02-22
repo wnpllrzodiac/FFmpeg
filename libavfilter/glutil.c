@@ -1,15 +1,17 @@
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
 #else
+#ifndef __ANDROID__
 #include <GL/glew.h>
 #include <GL/glx.h>
-#endif
-
 #include <GLFW/glfw3.h>
+#endif
+#endif
 
 #include <string.h>
 #include "glutil.h"
 
+#ifndef __ANDROID__
 static char *strsep(char **stringp, const char *delim) {
     char *rv = *stringp;
     if (rv) {
@@ -67,6 +69,7 @@ int no_window_init(void)
 
     return 0;
 }
+#endif
 
 StringArray_t parseQueryString (const char *str_query)  {
   StringArray_t sa;

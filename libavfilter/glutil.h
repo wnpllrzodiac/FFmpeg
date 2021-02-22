@@ -1,9 +1,15 @@
-#ifndef _GLU_TIL_H_
-#define _GLU_TIL_H_
+#ifndef _GL_UTIL_H_
+#define _GL_UTIL_H_
 
 #include <libavutil/avutil.h>
 
+#ifdef __ANDROID__
+#include <GLES3/gl3.h>
+#endif
+
+#ifndef GL_TRANSITION_USING_EGL
 int no_window_init(void);
+#endif
 
 typedef struct {
   char **strings;
@@ -20,4 +26,4 @@ void strSplitFloat(const char *strLiteral, const char *delimiter, float *pOutput
 int parseGlSLIntVector(const char* str,int *pOutput,int *pShape);
 int parseGlSLFloatVector(const char* str,float *pOutput,int *pShape);
 
-#endif // _GLU_TIL_H_
+#endif // _GL_UTIL_H_

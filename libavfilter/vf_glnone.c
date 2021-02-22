@@ -21,8 +21,10 @@
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
 #else
+#ifndef __ANDROID__
 #include <GL/glew.h>
 #include <GL/glx.h>
+#endif
 #endif
 
 #ifdef GL_TRANSITION_USING_EGL
@@ -256,7 +258,7 @@ static int config_props(AVFilterLink *inlink)
     glfwMakeContextCurrent(gs->window);
 #endif
 
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__ANDROID__)
     glewExperimental = GL_TRUE;
     glewInit();
 #endif

@@ -3634,7 +3634,11 @@ vpp_qsv_filter_select="qsvvpp"
 xfade_opencl_filter_deps="opencl"
 yadif_cuda_filter_deps="ffnvcodec"
 yadif_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
-glnone_filter_deps="opengl"
+if test "$target_os" = android; then
+    glnone_filter_extralibs="-landroid -lEGL -lGLESv3"
+else
+    glnone_filter_extralibs="opengl"
+fi
 glwave_filter_deps="glnone_filter"
 glsoulout_filter_deps="glnone_filter"
 glsnow_filter_deps="glnone_filter"
