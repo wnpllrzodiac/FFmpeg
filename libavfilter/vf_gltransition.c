@@ -9,7 +9,7 @@
 // example:
 // ./ffmpeg_g -ss 60 -i ~/work/media/astroboy.mp4 -i ~/work/media/TimeCode.mov 
 //   -filter_complex "[0:v]scale=640:480[v0];[1:v]scale=640:480[v1];
-//   [v0][v1]gltransition=duration=0.5:offset=5:source=crosswarp.glsl:source=direc.glsl:uniforms='direction=vec2(0.0,1.0)'" 
+//   [v0][v1]gltransition=duration=0.5:offset=5:source=crosswarp.glsl:uniforms='direction=vec2(0.0,1.0)'" 
 //   -c:v libx264 -b:v 2000k -c:a copy -t 10 -y out.mp4
 
 // gltransition=duration=0.5:offset=3:source=wd.glsl:uniforms='amplitude=30.0&speed=30.0'"
@@ -92,6 +92,7 @@ static const GLchar *f_shader_template =
     "uniform float ratio;\n"
     "uniform float _fromR;\n"
     "uniform float _toR;\n"
+    "uniform vec2 u_screenSize;\n"
     "\n"
     "vec4 getFromColor(vec2 uv) {\n"
     "  return texture2D(from, vec2(uv.x, 1.0 - uv.y));\n"
@@ -259,7 +260,7 @@ static int build_program(AVFilterContext *ctx)
 
         if (!f)
         {
-            av_log(ctx, AV_LOG_ERROR, "invalid transition source file \"%s\"\n", gs->source);
+            av_log(ctx, AV_LOG_ERROR, "transition source file NOT found: \"%s\"\n", gs->source);
             return -1;
         }
 
@@ -421,6 +422,9 @@ static void setup_uniforms(AVFilterLink *fromLink)
 
     gs->progress = glGetUniformLocation(gs->program, "progress");
     glUniform1f(gs->progress, 0.0f);
+
+    glUniform2f(glGetUniformLocation(gs->program, "u_screenSize"), 
+        (float)fromLink->w, (float)fromLink->h);
 
     // TODO: this should be output ratio
     gs->ratio = glGetUniformLocation(gs->program, "ratio");
