@@ -3634,11 +3634,6 @@ vpp_qsv_filter_select="qsvvpp"
 xfade_opencl_filter_deps="opencl"
 yadif_cuda_filter_deps="ffnvcodec"
 yadif_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
-if test "$target_os" = android; then
-    glnone_filter_deps="android EGL GLESv3"
-else
-    glnone_filter_deps="opengl"
-fi
 glwave_filter_deps="glnone_filter"
 glsoulout_filter_deps="glnone_filter"
 glsnow_filter_deps="glnone_filter"
@@ -7182,6 +7177,11 @@ enabled sr_filter           && prepend avfilter_deps "avformat swscale"
 enabled subtitles_filter    && prepend avfilter_deps "avformat avcodec"
 enabled uspp_filter         && prepend avfilter_deps "avcodec"
 enabled zoompan_filter      && prepend avfilter_deps "swscale"
+if test "$target_os" = android; then
+    enabled glnone_filter   && prepend "android EGL GLESv3"
+else
+    enabled glnone_filter   && prepend "opengl"
+fi
 
 enabled lavfi_indev         && prepend avdevice_deps "avfilter"
 
