@@ -278,6 +278,7 @@ OBJS-$(CONFIG_GLMIRROR_FILTER)               += vf_glmirror.o
 OBJS-$(CONFIG_GLRIPPLE_FILTER)               += vf_glripple.o
 OBJS-$(CONFIG_GLHEART_FILTER)                += vf_glheart.o
 OBJS-$(CONFIG_GLCOMMON_FILTER)               += vf_glcommon.o framesync.o
+OBJS-$(CONFIG_GLMASK_FILTER)                 += vf_glmask.o
 OBJS-$(CONFIG_GRADFUN_FILTER)                += vf_gradfun.o
 OBJS-$(CONFIG_GRAPHMONITOR_FILTER)           += f_graphmonitor.o
 OBJS-$(CONFIG_GREYEDGE_FILTER)               += vf_colorconstancy.o
