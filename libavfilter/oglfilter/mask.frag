@@ -4,6 +4,7 @@ varying vec2 texCoord;
 uniform sampler2D mask_tex;
 uniform sampler2D tex;
 
+uniform vec2 direction;
 uniform int blendMode;
 uniform float alphaFactor;
 
@@ -369,10 +370,11 @@ vec3 blendFunc(vec3 base, vec3 blend, float opacity,int blendMode) {
 
 void main(void) 
 {
-    vec4 fgColor = texture2D(mask_tex, vec2(texCoord.x, 1.0-texCoord.y));
+    vec2 uv = vec2(texCoord.x, 1.0-texCoord.y);
+    vec4 fgColor = texture2D(mask_tex, uv);
     fgColor = fgColor * alphaFactor;
         
-    vec4 bgColor = texture2D(tex, vec2(texCoord.x, 1.0-texCoord.y));
+    vec4 bgColor = texture2D(tex, uv + direction);
     vec3 color = blendFunc(bgColor.rgb, clamp(fgColor.rgb * (1.0 / fgColor.a), 0.0, 1.0), 1.0, blendMode);
     gl_FragColor = vec4(bgColor.rgb * (1.0 - fgColor.a) + color.rgb * fgColor.a, bgColor.a);
 }

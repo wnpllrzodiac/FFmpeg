@@ -73,6 +73,7 @@ static const GLchar *f_shader_source =
     "uniform sampler2D tex;\n"
     "uniform sampler2D mask_tex;\n"
     "\n"
+    "uniform vec2 direction;\n"
     "uniform int blendMode;\n"
     "uniform float alphaFactor;\n"
     "\n"
@@ -438,10 +439,11 @@ static const GLchar *f_shader_source =
     "\n"
     "void main(void) \n"
     "{\n"
-    "    vec4 fgColor = texture2D(mask_tex, vec2(texCoord.x, 1.0-texCoord.y));\n"
+    "    vec2 uv = vec2(texCoord.x, 1.0-texCoord.y);\n"
+    "    vec4 fgColor = texture2D(mask_tex, uv);\n"
     "    fgColor = fgColor * alphaFactor;\n"
     "        \n"
-    "    vec4 bgColor = texture2D(tex, vec2(texCoord.x, 1.0-texCoord.y));\n"
+    "    vec4 bgColor = texture2D(tex, uv + direction);\n"
     "    vec3 color = blendFunc(bgColor.rgb, clamp(fgColor.rgb * (1.0 / fgColor.a), 0.0, 1.0), 1.0, blendMode);\n"
     "    gl_FragColor = vec4(bgColor.rgb * (1.0 - fgColor.a) + color.rgb * fgColor.a, bgColor.a);\n"
     "}\n"
@@ -478,7 +480,7 @@ static const GLchar *f_shader_source =
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption glmask_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
-    {"alpha", "blend alpha value [0.0, 1.0]", OFFSET(alpha), AV_OPT_TYPE_DOUBLE, {.dbl = 0.5}, 0, 1.0, FLAGS},
+    {"alpha", "blend alpha value [0.0, 1.0]", OFFSET(alpha), AV_OPT_TYPE_DOUBLE, {.dbl = 0.9}, 0, 1.0, FLAGS},
     {"mode", "blend mode [0, 26]", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 26, FLAGS},
     {NULL}};
 
@@ -558,7 +560,10 @@ static void tex_setup(AVFilterLink *inlink)
     gs->mask_data = av_mallocz(500 * 500 * 4 * 48);
     FILE *pFile = fopen(tex_filename, "rb");
     if (pFile) {
-        fread(gs->mask_data, 4, 500 * 500 * 48, pFile);
+        int ret = fread(gs->mask_data, 4, 500 * 500 * 48, pFile);
+        if (ret != 500 * 500 * 4 * 48) {
+            av_log(NULL, AV_LOG_ERROR, "texture file is corrupted, file size is too small: %s\n", tex_filename);
+        }
         fclose(pFile);
         pFile = NULL;
     }
@@ -768,8 +773,22 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     const float time = in->pts * av_q2d(inlink->time_base);
     glUniform1f(gs->time, time);
+
+    int direction[5][2] = {{-1,-1},{-1,1},{1,1},{1,-1},{0,0}};
+    float intensity = 0.0035*2.0;
+    float fps = 25;
+    int id = (int)(time * fps);    
+    id = id % 5;
+    /*id = id % 10 + 1
+    if (id > 5) {
+        id -= 10;
+        if (id == 0)
+            id = 5;
+    }*/
     
-    glUniform1f(glGetUniformLocation(gs->program, "alphaFactor"), 0.5f);
+    glUniform2f(glGetUniformLocation(gs->program, "direction"), 
+        direction[id][0]*intensity,
+        direction[id][1]*intensity);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, gs->frame_tex);
