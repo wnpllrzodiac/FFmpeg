@@ -284,6 +284,7 @@ External library support:
   --enable-libwavpack      enable wavpack encoding via libwavpack [no]
   --enable-libwebp         enable WebP encoding via libwebp [no]
   --enable-libx264         enable H.264 encoding via x264 [no]
+  --enable-libfreeimage    enable FreeImage to support external texture load [no]
   --enable-libx265         enable HEVC encoding via x265 [no]
   --enable-libxavs         enable AVS encoding via xavs [no]
   --enable-libxavs2        enable AVS2 encoding via xavs2 [no]
@@ -3634,6 +3635,7 @@ vpp_qsv_filter_select="qsvvpp"
 xfade_opencl_filter_deps="opencl"
 yadif_cuda_filter_deps="ffnvcodec"
 yadif_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
+glnone_filter_deps="opengl" # android EGL GLESv3
 glwave_filter_deps="glnone_filter"
 glsoulout_filter_deps="glnone_filter"
 glsnow_filter_deps="glnone_filter"
@@ -3646,6 +3648,7 @@ glmirror_filter_deps="glnone_filter"
 glripple_filter_deps="glnone_filter"
 glheart_filter_deps="glnone_filter"
 glcommon_filter_deps="glnone_filter"
+glmask_filter_deps="glnone_filter libfreeimage"
 
 # examples
 avio_list_dir_deps="avformat avutil"
@@ -6426,6 +6429,7 @@ enabled libx264           && { check_pkg_config libx264 x264 "stdint.h x264.h" x
                                  warn "using libx264 without pkg-config"; } } &&
                              require_cpp_condition libx264 x264.h "X264_BUILD >= 118" &&
                              check_cpp_condition libx262 x264.h "X264_MPEG2"
+enabled libfreeimage      && require_pkg_config libfreeimage "libfreeimage >= 3.16.0" FreeImage.h FreeImage_GetVersion
 enabled libx265           && require_pkg_config libx265 x265 x265.h x265_api_get &&
                              require_cpp_condition libx265 x265.h "X265_BUILD >= 70"
 enabled libxavs           && require libxavs "stdint.h xavs.h" xavs_encoder_encode "-lxavs $pthreads_extralibs $libm_extralibs"
@@ -7177,11 +7181,6 @@ enabled sr_filter           && prepend avfilter_deps "avformat swscale"
 enabled subtitles_filter    && prepend avfilter_deps "avformat avcodec"
 enabled uspp_filter         && prepend avfilter_deps "avcodec"
 enabled zoompan_filter      && prepend avfilter_deps "swscale"
-if test "$target_os" = android; then
-    enabled glnone_filter   && prepend "android EGL GLESv3"
-else
-    enabled glnone_filter   && prepend "opengl"
-fi
 
 enabled lavfi_indev         && prepend avdevice_deps "avfilter"
 
