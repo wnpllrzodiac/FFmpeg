@@ -1,0 +1,13 @@
+prefix=/usr
+exec_prefix=${prefix}
+includedir=/usr/include
+libdir=/usr/lib
+
+Name: FreeImage
+Description: Open Source library project for developers who would like to support popular graphics image formats like PNG, BMP, JPEG, TIFF
+Version: 3.18.0
+URL: https://freeimage.sourceforge.io/
+Requires.private:  x11
+Libs: -L${libdir} -lfreeimage
+Libs.private:
+Cflags: -I${includedir}

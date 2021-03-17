@@ -1,6 +1,9 @@
 #include "libavutil/opt.h"
 #include "internal.h"
 #include "glutil.h"
+#include "FreeImage.h"
+
+// sudo apt-get install libfreeimage-dev
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -465,6 +468,7 @@ static const GLchar *f_shader_source =
     double alpha;
 
     uint8_t *mask_data;
+    int mask_pic_num;
 
 #ifdef GL_TRANSITION_USING_EGL
     EGLDisplay      eglDpy;
@@ -524,7 +528,7 @@ static void vbo_setup(GlMaskContext *gs)
     glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
 }
 
-static void tex_setup(AVFilterLink *inlink)
+static int tex_setup(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
     GlMaskContext *gs = ctx->priv;
@@ -556,6 +560,7 @@ static void tex_setup(AVFilterLink *inlink)
 
     glUniform1i(glGetUniformLocation(gs->program, "mask_tex"), 1);
 
+    /*
     const char* tex_filename = "out.tex";
     gs->mask_data = av_mallocz(500 * 500 * 4 * 48);
     FILE *pFile = fopen(tex_filename, "rb");
@@ -570,6 +575,36 @@ static void tex_setup(AVFilterLink *inlink)
     else {
         av_log(NULL, AV_LOG_ERROR, "failed to load texture file: %s\n", tex_filename);
     }
+    */
+
+    for (int i=0;i<gs->mask_pic_num;i++) {
+        char filename[256] = {0};
+        sprintf(filename, gs->imgfile_fmt, i);
+        FIBITMAP *img = FreeImage_Load(FIF_PNG, filename);
+		if (!img) {
+			av_log(NULL, AV_LOG_ERROR, "failed to open image file: %s\n", filename);
+			return -1;
+		}
+
+		int w = FreeImage_GetWidth(img);
+		int h = FreeImage_GetHeight(img);
+		int bpp = FreeImage_GetBPP(img);
+		av_log(NULL, AV_LOG_INFO, "img res: %d x %d, bpp %d\n", w, h, bpp);
+
+        if (!gs->mask_data)
+            gs->mask_data = av_mallocz(w * h * bpp / 8 * gs->mask_pic_num);
+
+		BYTE *data = FreeImage_GetBits(img);
+		if (!data) {
+            av_log(NULL, AV_LOG_ERROR, "failed to get image data: %s\n", filename);
+            return -1;
+		}
+
+        memcpy(gs->mask_data + w * h * bpp / 8 * i, data, w * h * bpp / 8);
+		FreeImage_Unload(img);
+    }
+
+    return 0;
 }
 
 static int build_program(AVFilterContext *ctx)
@@ -753,7 +788,11 @@ static int config_props(AVFilterLink *inlink)
     glUseProgram(gs->program);
     vbo_setup(gs);
     setup_uniforms(inlink);
-    tex_setup(inlink);
+    if (tex_setup(inlink) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "failed to setup texture\n");
+        return -1;
+    }
+
     return 0;
 }
 
