@@ -4,6 +4,7 @@
 #include "FreeImage.h"
 
 // sudo apt-get install libfreeimage-dev
+// ./ffplay r3.mp4 -vf glmask=tex_count=48:tex_path_fmt='libavfilter/oglfilter/1/a_%d.png' -an
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -469,6 +470,7 @@ static const GLchar *f_shader_source =
 
     uint8_t *mask_data;
     int mask_pic_num;
+    char *mask_pic_fmt;
 
 #ifdef GL_TRANSITION_USING_EGL
     EGLDisplay      eglDpy;
@@ -486,6 +488,8 @@ static const AVOption glmask_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {"alpha", "blend alpha value [0.0, 1.0]", OFFSET(alpha), AV_OPT_TYPE_DOUBLE, {.dbl = 0.9}, 0, 1.0, FLAGS},
     {"mode", "blend mode [0, 26]", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 26, FLAGS},
+    {"tex_count", "total texture file count", OFFSET(mask_pic_num), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 200, FLAGS},
+    { "tex_path_fmt", "texture file format, e.g.: image/%d.png", OFFSET(mask_pic_fmt), AV_OPT_TYPE_STRING, {.str = "0"}, 0, 0, FLAGS },
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(glmask);
@@ -560,48 +564,40 @@ static int tex_setup(AVFilterLink *inlink)
 
     glUniform1i(glGetUniformLocation(gs->program, "mask_tex"), 1);
 
-    /*
-    const char* tex_filename = "out.tex";
-    gs->mask_data = av_mallocz(500 * 500 * 4 * 48);
-    FILE *pFile = fopen(tex_filename, "rb");
-    if (pFile) {
-        int ret = fread(gs->mask_data, 4, 500 * 500 * 48, pFile);
-        if (ret != 500 * 500 * 4 * 48) {
-            av_log(NULL, AV_LOG_ERROR, "texture file is corrupted, file size is too small: %s\n", tex_filename);
-        }
-        fclose(pFile);
-        pFile = NULL;
+    if (gs->mask_pic_fmt == NULL || gs->mask_pic_num == 0 || gs->mask_pic_num > 256) {
+        av_log(NULL, AV_LOG_ERROR, "invalid mask pic settings\n");
+        return -1;
     }
-    else {
-        av_log(NULL, AV_LOG_ERROR, "failed to load texture file: %s\n", tex_filename);
-    }
-    */
 
-    for (int i=0;i<gs->mask_pic_num;i++) {
+    for (int i=0 ; i < gs->mask_pic_num ; i++) {
         char filename[256] = {0};
-        sprintf(filename, gs->imgfile_fmt, i);
-        FIBITMAP *img = FreeImage_Load(FIF_PNG, filename);
-		if (!img) {
-			av_log(NULL, AV_LOG_ERROR, "failed to open image file: %s\n", filename);
-			return -1;
-		}
+        sprintf(filename, gs->mask_pic_fmt, i);
+        FIBITMAP *img = FreeImage_Load(FIF_PNG, filename, 0);
+        if (!img) {
+            av_log(NULL, AV_LOG_ERROR, "failed to open image file: %s\n", filename);
+            return -1;
+        }
 
-		int w = FreeImage_GetWidth(img);
-		int h = FreeImage_GetHeight(img);
-		int bpp = FreeImage_GetBPP(img);
-		av_log(NULL, AV_LOG_INFO, "img res: %d x %d, bpp %d\n", w, h, bpp);
+        int w = FreeImage_GetWidth(img);
+        int h = FreeImage_GetHeight(img);
+        int bpp = FreeImage_GetBPP(img);
+        //av_log(NULL, AV_LOG_DEBUG, "img res: %d x %d, bpp %d\n", w, h, bpp);
+        if (w <= 0 || h <= 0 || bpp <= 0) {
+            av_log(NULL, AV_LOG_ERROR, "failed to get image file info: %s\n", filename);
+            return -1;
+        }
 
         if (!gs->mask_data)
             gs->mask_data = av_mallocz(w * h * bpp / 8 * gs->mask_pic_num);
 
-		BYTE *data = FreeImage_GetBits(img);
-		if (!data) {
+        BYTE *data = FreeImage_GetBits(img);
+        if (!data) {
             av_log(NULL, AV_LOG_ERROR, "failed to get image data: %s\n", filename);
             return -1;
-		}
+        }
 
         memcpy(gs->mask_data + w * h * bpp / 8 * i, data, w * h * bpp / 8);
-		FreeImage_Unload(img);
+        FreeImage_Unload(img);
     }
 
     return 0;
@@ -865,6 +861,11 @@ static av_cold void uninit(AVFilterContext *ctx)
         glfwDestroyWindow(gs->window);
     }
 #endif
+
+    if (gs->mask_data) {
+        av_free(gs->mask_data);
+        gs->mask_data = NULL;
+    }
 }
 
 static int query_formats(AVFilterContext *ctx)
