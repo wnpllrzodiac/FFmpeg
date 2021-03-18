@@ -49,6 +49,7 @@
 #include "libavutil/file.h"
 #include "libavutil/eval.h"
 #include "libavutil/opt.h"
+#include "libavutil/time.h"
 #include "libavutil/random_seed.h"
 #include "libavutil/parseutils.h"
 #include "libavutil/timecode.h"
@@ -1006,6 +1007,25 @@ static int func_metadata(AVFilterContext *ctx, AVBPrint *bp,
     return 0;
 }
 
+// https://my.oschina.net/zhangxu0512/blog/758769
+// ./ffmpeg -y -i ~/michael/media/TimeCode.mov -vf "drawtext=:fontsize=50:fontcolor=red:x=(w-tw)/2:y=(h-th)/2:text='%{timestamp}'" 
+//    -c:v libx264 -b:v 1024k -c:a aac -b:a 64k /home/shortvideo/michael/git/testpy/mergevideo/out.mp4
+static int func_timestamp(AVFilterContext *ctx, AVBPrint *bp, 
+                           char *fct, unsigned argc, char **argv, int tag)
+{
+
+    int64_t ms = av_gettime() / 1000;
+    time_t  s = (time_t)(ms/1000);
+
+    struct tm tm;
+
+    localtime_r(&s, &tm);
+    av_bprint_strftime(bp, "%H:%M:%S", &tm);
+    av_bprintf(bp, ".%03d", (int)(ms % 1000));
+
+    return 0;
+}
+
 static int func_strftime(AVFilterContext *ctx, AVBPrint *bp,
                          char *fct, unsigned argc, char **argv, int tag)
 {
@@ -1121,6 +1141,7 @@ static const struct drawtext_function {
     { "frame_num", 0, 0, 0,   func_frame_num },
     { "n",         0, 0, 0,   func_frame_num },
     { "metadata",  1, 2, 0,   func_metadata },
+    { "timestamp",  0, 0, 0,  func_timestamp },
 };
 
 static int eval_function(AVFilterContext *ctx, AVBPrint *bp, char *fct,
