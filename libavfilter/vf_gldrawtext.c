@@ -95,6 +95,14 @@ static const GLchar *f_shader_source =
     "  gl_FragColor = texture2D(tex, uv);\n"
     "}\n";
 
+static const GLchar *text_v_shader_source =
+    "attribute vec4 pos_tex;\n"
+    "varying vec2 texCoord;\n"
+    "void main(void) {\n"
+    "  gl_Position = vec4(pos_tex.xy, 0, 1);\n"
+    "  texCoord = vec2(pos_tex.z, 1.0 - pos_tex.w);\n"
+    "}\n";
+
 #undef __FTERRORS_H__
 #define FT_ERROR_START_LIST {
 #define FT_ERRORDEF(e, v, s) { (e), (s) },
@@ -173,6 +181,7 @@ typedef struct
 {
     const AVClass *class;
     GLuint program;
+    GLunit program_text;
     GLuint frame_tex;
     GLuint pos_buf;
     GLint pos_type;
@@ -606,25 +615,30 @@ static void tex_setup(AVFilterLink *inlink)
     glUniform1i(glGetUniformLocation(gs->program, "tex"), 0);
 }
 
-static int build_program(AVFilterContext *ctx)
+static int build_program(AVFilterContext *ctx, GLuint *program, const char* vs, const char* fs)
 {
     GLuint v_shader, f_shader;
     GlDrawTextContext *gs = ctx->priv;
 
-    if (!((v_shader = build_shader(ctx, v_shader_source, GL_VERTEX_SHADER)) &&
-          (f_shader = build_shader(ctx, f_shader_source, GL_FRAGMENT_SHADER))))
+    if (!((v_shader = build_shader(ctx, vs, GL_VERTEX_SHADER)) &&
+          (f_shader = build_shader(ctx, fs, GL_FRAGMENT_SHADER))))
     {
         return -1;
     }
 
-    gs->program = glCreateProgram();
-    glAttachShader(gs->program, v_shader);
-    glAttachShader(gs->program, f_shader);
-    glLinkProgram(gs->program);
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, v_shader);
+    glAttachShader(prog, f_shader);
+    glLinkProgram(prog);
 
     GLint status;
     glGetProgramiv(gs->program, GL_LINK_STATUS, &status);
-    return status == GL_TRUE ? 0 : -1;
+    if (status == GL_TRUE) {
+        *program = prog;
+        return 0;
+    }
+
+    return -1;
 }
 
 static av_cold int init(AVFilterContext *ctx)
@@ -836,9 +850,14 @@ static int config_props(AVFilterLink *inlink)
     glViewport(0, 0, inlink->w, inlink->h);
 
     int ret;
-    if ((ret = build_program(ctx)) < 0)
+    if ((ret = build_program(ctx, v_shader_source, f_shader_source, &gs->program)) < 0)
     {
         av_log(NULL, AV_LOG_ERROR, "failed to build ogl program: %d\n", ret);
+        return ret;
+    }
+    if ((ret = build_program(ctx, text_v_shader_source, f_shader_source, &gs->program_text)) < 0)
+    {
+        av_log(NULL, AV_LOG_ERROR, "failed to build ogl text program: %d\n", ret);
         return ret;
     }
 
@@ -1029,6 +1048,10 @@ continue_on_invalid2:
                            &fontcolor, 0, 0, 0)) < 0)
         return ret;
 
+    // render it!!!
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
     return 0;
 }
 
@@ -1045,10 +1068,13 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
     av_frame_copy_props(out, in);
 
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    glUseProgram(gs->program);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glUseProgram(gs->program_text);
     draw_text(ctx, in, inlink->w, inlink->h);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
     glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
 
     av_frame_free(&in);
