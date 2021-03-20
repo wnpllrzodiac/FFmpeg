@@ -264,6 +264,7 @@ extern AVFilter ff_vf_glripple;
 extern AVFilter ff_vf_glheart;
 extern AVFilter ff_vf_glcommon;
 extern AVFilter ff_vf_glmask;
+extern AVFilter ff_vf_gldrawtext;
 extern AVFilter ff_vf_gradfun;
 extern AVFilter ff_vf_graphmonitor;
 extern AVFilter ff_vf_greyedge;
