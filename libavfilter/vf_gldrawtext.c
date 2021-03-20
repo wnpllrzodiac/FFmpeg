@@ -1,6 +1,22 @@
 #include "libavutil/opt.h"
+#include "libavutil/bprint.h"
+#include "libavutil/tree.h"
+#include "libavutil/file.h"
 #include "internal.h"
 #include "glutil.h"
+
+#if CONFIG_LIBFONTCONFIG
+#include <fontconfig/fontconfig.h>
+#endif
+
+#if CONFIG_LIBFRIBIDI
+#include <fribidi.h>
+#endif
+
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include FT_GLYPH_H
+#include FT_STROKER_H
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -84,6 +100,32 @@ static const GLchar *f_shader_source =
     "  gl_FragColor = texture2D(tex, uv);\n"
     "}\n";
 
+#undef __FTERRORS_H__
+#define FT_ERROR_START_LIST {
+#define FT_ERRORDEF(e, v, s) { (e), (s) },
+#define FT_ERROR_END_LIST { 0, NULL } };
+
+static const struct ft_error {
+    int err;
+    const char *err_msg;
+} ft_errors[] =
+#include FT_ERRORS_H
+
+#define FT_ERRMSG(e) ft_errors[e].err_msg
+
+typedef struct Glyph {
+    FT_Glyph glyph;
+    FT_Glyph border_glyph;
+    uint32_t code;
+    unsigned int fontsize;
+    FT_Bitmap bitmap; ///< array holding bitmaps of font
+    FT_Bitmap border_bitmap; ///< array holding bitmaps of font border
+    FT_BBox bbox;
+    int advance;
+    int bitmap_left;
+    int bitmap_top;
+} Glyph;
+
 #define PIXEL_FORMAT GL_RGB
 
 typedef struct
@@ -93,6 +135,38 @@ typedef struct
     GLuint frame_tex;
     GLuint pos_buf;
     GLint pos_type;
+
+#if CONFIG_LIBFONTCONFIG
+    uint8_t *font;                  ///< font to be used
+#endif
+    uint8_t *fontfile;              ///< font to be used
+    uint8_t *text;                  ///< text to be drawn
+    FT_Vector *positions;           ///< positions for each element in the text
+    size_t nb_positions;            ///< number of elements of positions array
+    int ft_load_flags;              ///< flags used for loading fonts, see FT_LOAD_*
+    char *textfile;                 ///< file with text to be drawn
+    int x;                          ///< x position to start drawing text
+    int y;                          ///< y position to start drawing text
+    int max_glyph_w;                ///< max glyph width
+    int max_glyph_h;                ///< max glyph height
+    int shadowx, shadowy;
+    int borderw;                    ///< border width
+
+    FT_Library library;             ///< freetype font library handle
+    FT_Face face;                   ///< freetype font face handle
+    FT_Stroker stroker;             ///< freetype stroker handle
+    struct AVTreeNode *glyphs;      ///< rendered glyphs, stored using the UTF-32 char code
+
+    unsigned int fontsize;          ///< font size to use
+    unsigned int default_fontsize;  ///< default font size to use
+
+    int line_spacing;               ///< lines spacing in pixels
+
+    int use_kerning;                ///< font kerning is used - true/false
+    int tabsize;                    ///< tab size
+
+    int reload;                     ///< reload text file for each frame
+    int start_number;               ///< starting frame number for n/frame_num var
 
     int no_window;
     int type;
@@ -112,9 +186,275 @@ typedef struct
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption gldrawtext_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
+    {"fontfile",    "set font file",        OFFSET(fontfile),           AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS},
+    {"text",        "set text",             OFFSET(text),               AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS},
+    {"textfile",    "set text file",        OFFSET(textfile),           AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS},
+    {"line_spacing",  "set line spacing in pixels", OFFSET(line_spacing),   AV_OPT_TYPE_INT,    {.i64=0},     INT_MIN,  INT_MAX,FLAGS},
+    {"fontsize",    "set font size",        OFFSET(fontsize),      AV_OPT_TYPE_INT, {.i64= 32 },  0, 1024, FLAGS},
+    {"x",           "set x",     OFFSET(x),             AV_OPT_TYPE_INT, {.i64= 0 },   0, 4096, FLAGS},
+    {"y",           "set y",     OFFSET(y),             AV_OPT_TYPE_INT, {.i64= 0 },   0, 4096, FLAGS},
+    {"tabsize",     "set tab size",         OFFSET(tabsize),            AV_OPT_TYPE_INT,    {.i64=4},     0,        INT_MAX , FLAGS},
+#if CONFIG_LIBFONTCONFIG
+    { "font",        "Font name",            OFFSET(font),               AV_OPT_TYPE_STRING, { .str = "Sans" },           .flags = FLAGS },
+#endif
+    {"reload",     "reload text file for each frame",                       OFFSET(reload),     AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGS},
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(gldrawtext);
+
+static int load_font_file(AVFilterContext *ctx, const char *path, int index)
+{
+    GlDrawTextContext *s = ctx->priv;
+    int err;
+
+    err = FT_New_Face(s->library, path, index, &s->face);
+    if (err) {
+#if !CONFIG_LIBFONTCONFIG
+        av_log(ctx, AV_LOG_ERROR, "Could not load font \"%s\": %s\n",
+               s->fontfile, FT_ERRMSG(err));
+#endif
+        return AVERROR(EINVAL);
+    }
+    return 0;
+}
+
+#if CONFIG_LIBFONTCONFIG
+static int load_font_fontconfig(AVFilterContext *ctx)
+{
+    GlDrawTextContext *s = ctx->priv;
+    FcConfig *fontconfig;
+    FcPattern *pat, *best;
+    FcResult result = FcResultMatch;
+    FcChar8 *filename;
+    int index;
+    double size;
+    int err = AVERROR(ENOENT);
+    int parse_err;
+
+    fontconfig = FcInitLoadConfigAndFonts();
+    if (!fontconfig) {
+        av_log(ctx, AV_LOG_ERROR, "impossible to init fontconfig\n");
+        return AVERROR_UNKNOWN;
+    }
+    pat = FcNameParse(s->fontfile ? s->fontfile :
+                          (uint8_t *)(intptr_t)"default");
+    if (!pat) {
+        av_log(ctx, AV_LOG_ERROR, "could not parse fontconfig pat");
+        return AVERROR(EINVAL);
+    }
+
+    FcPatternAddString(pat, FC_FAMILY, s->font);
+
+    FcPatternAddDouble(pat, FC_SIZE, s->fontsize);
+
+    FcDefaultSubstitute(pat);
+
+    if (!FcConfigSubstitute(fontconfig, pat, FcMatchPattern)) {
+        av_log(ctx, AV_LOG_ERROR, "could not substitue fontconfig options"); /* very unlikely */
+        FcPatternDestroy(pat);
+        return AVERROR(ENOMEM);
+    }
+
+    best = FcFontMatch(fontconfig, pat, &result);
+    FcPatternDestroy(pat);
+
+    if (!best || result != FcResultMatch) {
+        av_log(ctx, AV_LOG_ERROR,
+               "Cannot find a valid font for the family %s\n",
+               s->font);
+        goto fail;
+    }
+
+    if (
+        FcPatternGetInteger(best, FC_INDEX, 0, &index   ) != FcResultMatch ||
+        FcPatternGetDouble (best, FC_SIZE,  0, &size    ) != FcResultMatch) {
+        av_log(ctx, AV_LOG_ERROR, "impossible to find font information");
+        return AVERROR(EINVAL);
+    }
+
+    if (FcPatternGetString(best, FC_FILE, 0, &filename) != FcResultMatch) {
+        av_log(ctx, AV_LOG_ERROR, "No file path for %s\n",
+               s->font);
+        goto fail;
+    }
+
+    av_log(ctx, AV_LOG_INFO, "Using \"%s\"\n", filename);
+    if (parse_err)
+        s->default_fontsize = size + 0.5;
+
+    err = load_font_file(ctx, filename, index);
+    if (err)
+        return err;
+    FcConfigDestroy(fontconfig);
+fail:
+    FcPatternDestroy(best);
+    return err;
+}
+#endif
+
+static int load_font(AVFilterContext *ctx)
+{
+    GlDrawTextContext *s = ctx->priv;
+    int err;
+
+    /* load the face, and set up the encoding, which is by default UTF-8 */
+    err = load_font_file(ctx, s->fontfile, 0);
+    if (!err)
+        return 0;
+#if CONFIG_LIBFONTCONFIG
+    err = load_font_fontconfig(ctx);
+    if (!err)
+        return 0;
+#endif
+    return err;
+}
+
+static int load_textfile(AVFilterContext *ctx)
+{
+    GlDrawTextContext *s = ctx->priv;
+    int err;
+    uint8_t *textbuf;
+    uint8_t *tmp;
+    size_t textbuf_size;
+
+    if ((err = av_file_map(s->textfile, &textbuf, &textbuf_size, 0, ctx)) < 0) {
+        av_log(ctx, AV_LOG_ERROR,
+               "The text file '%s' could not be read or is empty\n",
+               s->textfile);
+        return err;
+    }
+
+    if (textbuf_size > SIZE_MAX - 1 || !(tmp = av_realloc(s->text, textbuf_size + 1))) {
+        av_file_unmap(textbuf, textbuf_size);
+        return AVERROR(ENOMEM);
+    }
+    s->text = tmp;
+    memcpy(s->text, textbuf, textbuf_size);
+    s->text[textbuf_size] = 0;
+    av_file_unmap(textbuf, textbuf_size);
+
+    return 0;
+}
+
+static inline int is_newline(uint32_t c)
+{
+    return c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static int glyph_cmp(const void *key, const void *b)
+{
+    const Glyph *a = key, *bb = b;
+    int64_t diff = (int64_t)a->code - (int64_t)bb->code;
+
+    if (diff != 0)
+         return diff > 0 ? 1 : -1;
+    else
+         return FFDIFFSIGN((int64_t)a->fontsize, (int64_t)bb->fontsize);
+}
+
+/**
+ * Load glyphs corresponding to the UTF-32 codepoint code.
+ */
+static int load_glyph(AVFilterContext *ctx, Glyph **glyph_ptr, uint32_t code)
+{
+    GlDrawTextContext *s = ctx->priv;
+    FT_BitmapGlyph bitmapglyph;
+    Glyph *glyph;
+    struct AVTreeNode *node = NULL;
+    int ret;
+
+    /* load glyph into s->face->glyph */
+    if (FT_Load_Char(s->face, code, s->ft_load_flags))
+        return AVERROR(EINVAL);
+
+    glyph = av_mallocz(sizeof(*glyph));
+    if (!glyph) {
+        ret = AVERROR(ENOMEM);
+        goto error;
+    }
+    glyph->code  = code;
+    glyph->fontsize = s->fontsize;
+
+    if (FT_Get_Glyph(s->face->glyph, &glyph->glyph)) {
+        ret = AVERROR(EINVAL);
+        goto error;
+    }
+    if (s->borderw) {
+        glyph->border_glyph = glyph->glyph;
+        if (FT_Glyph_StrokeBorder(&glyph->border_glyph, s->stroker, 0, 0) ||
+            FT_Glyph_To_Bitmap(&glyph->border_glyph, FT_RENDER_MODE_NORMAL, 0, 1)) {
+            ret = AVERROR_EXTERNAL;
+            goto error;
+        }
+        bitmapglyph = (FT_BitmapGlyph) glyph->border_glyph;
+        glyph->border_bitmap = bitmapglyph->bitmap;
+    }
+    if (FT_Glyph_To_Bitmap(&glyph->glyph, FT_RENDER_MODE_NORMAL, 0, 1)) {
+        ret = AVERROR_EXTERNAL;
+        goto error;
+    }
+    bitmapglyph = (FT_BitmapGlyph) glyph->glyph;
+
+    glyph->bitmap      = bitmapglyph->bitmap;
+    glyph->bitmap_left = bitmapglyph->left;
+    glyph->bitmap_top  = bitmapglyph->top;
+    glyph->advance     = s->face->glyph->advance.x >> 6;
+
+    /* measure text height to calculate text_height (or the maximum text height) */
+    FT_Glyph_Get_CBox(glyph->glyph, ft_glyph_bbox_pixels, &glyph->bbox);
+
+    /* cache the newly created glyph */
+    if (!(node = av_tree_node_alloc())) {
+        ret = AVERROR(ENOMEM);
+        goto error;
+    }
+    av_tree_insert(&s->glyphs, glyph, glyph_cmp, &node);
+
+    if (glyph_ptr)
+        *glyph_ptr = glyph;
+    return 0;
+
+error:
+    if (glyph)
+        av_freep(&glyph->glyph);
+
+    av_freep(&glyph);
+    av_freep(&node);
+    return ret;
+}
+
+static av_cold int set_fontsize(AVFilterContext *ctx, unsigned int fontsize)
+{
+    int err;
+    GlDrawTextContext *s = ctx->priv;
+
+    if ((err = FT_Set_Pixel_Sizes(s->face, 0, fontsize))) {
+        av_log(ctx, AV_LOG_ERROR, "Could not set font size to %d pixels: %s\n",
+               fontsize, FT_ERRMSG(err));
+        return AVERROR(EINVAL);
+    }
+
+    s->fontsize = fontsize;
+
+    return 0;
+}
+
+static av_cold int update_fontsize(AVFilterContext *ctx)
+{
+    GlDrawTextContext *s = ctx->priv;
+    unsigned int fontsize = s->default_fontsize;
+    int err;
+    double size, roundedsize;
+
+    if (fontsize == 0)
+        fontsize = 1;
+
+    // no change
+    if (fontsize == s->fontsize)
+        return 0;
+
+    return set_fontsize(ctx, fontsize);
+}
 
 static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GLenum type)
 {
@@ -195,6 +535,7 @@ static int build_program(AVFilterContext *ctx)
 
 static av_cold int init(AVFilterContext *ctx)
 {
+    int err;
     GlDrawTextContext *gs = ctx->priv;
     
 #ifndef GL_TRANSITION_USING_EGL
@@ -204,8 +545,61 @@ static av_cold int init(AVFilterContext *ctx)
         no_window_init();
     }
 
-    return glfwInit() ? 0 : -1;
+    if(!glfwInit())
+        return -1;
 #endif
+
+    GlDrawTextContext *s = ctx->priv;
+    Glyph *glyph;
+
+    s->fontsize = 0;
+    s->default_fontsize = 16;
+
+    if (!s->fontfile && !CONFIG_LIBFONTCONFIG) {
+        av_log(ctx, AV_LOG_ERROR, "No font filename provided\n");
+        return AVERROR(EINVAL);
+    }
+
+    if (s->textfile) {
+        if (s->text) {
+            av_log(ctx, AV_LOG_ERROR,
+                   "Both text and text file provided. Please provide only one\n");
+            return AVERROR(EINVAL);
+        }
+        if ((err = load_textfile(ctx)) < 0)
+            return err;
+    }
+
+    if (s->reload && !s->textfile)
+        av_log(ctx, AV_LOG_WARNING, "No file to reload\n");
+
+    if (!s->text) {
+        av_log(ctx, AV_LOG_ERROR,
+               "Either text, a valid file or a timecode must be provided\n");
+        return AVERROR(EINVAL);
+    }
+
+    if ((err = FT_Init_FreeType(&(s->library)))) {
+        av_log(ctx, AV_LOG_ERROR,
+               "Could not load FreeType: %s\n", FT_ERRMSG(err));
+        return AVERROR(EINVAL);
+    }
+
+    if ((err = load_font(ctx)) < 0)
+        return err;
+
+    if ((err = update_fontsize(ctx)) < 0)
+        return err;
+
+    /* load the fallback glyph with code 0 */
+    load_glyph(ctx, NULL, 0);
+
+    /* set the tabsize in pixels */
+    if ((err = load_glyph(ctx, &glyph, ' ')) < 0) {
+        av_log(ctx, AV_LOG_ERROR, "Could not set tabsize.\n");
+        return err;
+    }
+    s->tabsize *= glyph->advance;
 
     return 0;
 }
@@ -353,6 +747,99 @@ static int config_props(AVFilterLink *inlink)
     return 0;
 }
 
+static int draw_text(AVFilterContext *ctx, AVFrame *frame,
+                     int width, int height)
+{
+    GlDrawTextContext *s = ctx->priv;
+
+    uint32_t code = 0, prev_code = 0;
+    int x = 0, y = 0, i = 0, ret;
+    int max_text_line_w = 0, len;
+    int box_w, box_h;
+    char *text;
+    uint8_t *p;
+    int y_min = 32000, y_max = -32000;
+    int x_min = 32000, x_max = -32000;
+    FT_Vector delta;
+    Glyph *glyph = NULL, *prev_glyph = NULL;
+    Glyph dummy = { 0 };  
+
+    x = 0;
+    y = 0;
+
+    if ((ret = update_fontsize(ctx)) < 0)
+        return ret;
+
+    /* load and cache glyphs */
+    for (i = 0, p = text; *p; i++) {
+        GET_UTF8(code, *p ? *p++ : 0, code = 0xfffd; goto continue_on_invalid;);
+continue_on_invalid:
+
+        /* get glyph */
+        dummy.code = code;
+        dummy.fontsize = s->fontsize;
+        glyph = av_tree_find(s->glyphs, &dummy, glyph_cmp, NULL);
+        if (!glyph) {
+            ret = load_glyph(ctx, &glyph, code);
+            if (ret < 0)
+                return ret;
+        }
+
+        y_min = FFMIN(glyph->bbox.yMin, y_min);
+        y_max = FFMAX(glyph->bbox.yMax, y_max);
+        x_min = FFMIN(glyph->bbox.xMin, x_min);
+        x_max = FFMAX(glyph->bbox.xMax, x_max);
+    }
+    s->max_glyph_h = y_max - y_min;
+    s->max_glyph_w = x_max - x_min;
+
+    /* compute and save position for each glyph */
+    glyph = NULL;
+    for (i = 0, p = text; *p; i++) {
+        GET_UTF8(code, *p ? *p++ : 0, code = 0xfffd; goto continue_on_invalid2;);
+continue_on_invalid2:
+
+        /* skip the \n in the sequence \r\n */
+        if (prev_code == '\r' && code == '\n')
+            continue;
+
+        prev_code = code;
+        if (is_newline(code)) {
+
+            max_text_line_w = FFMAX(max_text_line_w, x);
+            y += s->max_glyph_h + s->line_spacing;
+            x = 0;
+            continue;
+        }
+
+        /* get glyph */
+        prev_glyph = glyph;
+        dummy.code = code;
+        dummy.fontsize = s->fontsize;
+        glyph = av_tree_find(s->glyphs, &dummy, glyph_cmp, NULL);
+
+        /* kerning */
+        if (s->use_kerning && prev_glyph && glyph->code) {
+            FT_Get_Kerning(s->face, prev_glyph->code, glyph->code,
+                           ft_kerning_default, &delta);
+            x += delta.x >> 6;
+        }
+
+        /* save position */
+        s->positions[i].x = x + glyph->bitmap_left;
+        s->positions[i].y = y - glyph->bitmap_top + y_max;
+        if (code == '\t') x  = (x / s->tabsize + 1)*s->tabsize;
+        else              x += glyph->advance;
+    }
+
+    max_text_line_w = FFMAX(x, max_text_line_w); 
+
+    box_w = max_text_line_w;
+    box_h = y + s->max_glyph_h;
+    av_log(NULL, AV_LOG_ERROR, "box_w %d, box_h %d\n", box_w, box_h);
+    return 0;
+}
+
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
@@ -370,13 +857,40 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
 
+    static int once = 0;
+    if (!once) {
+        draw_text(ctx, out, inlink->w, inlink->h);
+        once = 1;
+    }
+
     av_frame_free(&in);
     return ff_filter_frame(outlink, out);
+}
+
+static int glyph_enu_free(void *opaque, void *elem)
+{
+    Glyph *glyph = elem;
+
+    FT_Done_Glyph(glyph->glyph);
+    FT_Done_Glyph(glyph->border_glyph);
+    av_free(elem);
+    return 0;
 }
 
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlDrawTextContext *gs = ctx->priv;
+
+    av_freep(&gs->positions);
+    gs->nb_positions = 0;
+
+    av_tree_enumerate(gs->glyphs, NULL, NULL, glyph_enu_free);
+    av_tree_destroy(gs->glyphs);
+    gs->glyphs = NULL;
+
+    FT_Done_Face(gs->face);
+    FT_Stroker_Done(gs->stroker);
+    FT_Done_FreeType(gs->library);
 
 #ifdef GL_TRANSITION_USING_EGL
     if (gs->eglDpy) {
