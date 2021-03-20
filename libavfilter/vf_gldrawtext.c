@@ -1,7 +1,11 @@
-#include "libavutil/opt.h"
 #include "libavutil/bprint.h"
-#include "libavutil/tree.h"
+#include "libavutil/eval.h"
 #include "libavutil/file.h"
+#include "libavutil/lfg.h"
+#include "libavutil/opt.h"
+#include "libavutil/tree.h"
+#include "libavutil/parseutils.h"
+#include "drawutils.h"
 #include "internal.h"
 #include "glutil.h"
 
@@ -88,15 +92,6 @@ static const GLchar *f_shader_source =
     "uniform int type;\n"
     "void main() {\n"
     "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
-    "  if (type == 0) {\n"
-    "    if (uv.x > 0.5) {\n"
-    "      uv.x = 1.0 - uv.x;\n"
-    "    }\n"
-    "  } else {\n"
-    "    if (uv.y > 0.5) {\n"
-    "      uv.y = 1.0 - uv.y;\n"
-    "    }\n"
-    "  }\n"
     "  gl_FragColor = texture2D(tex, uv);\n"
     "}\n";
 
@@ -104,6 +99,52 @@ static const GLchar *f_shader_source =
 #define FT_ERROR_START_LIST {
 #define FT_ERRORDEF(e, v, s) { (e), (s) },
 #define FT_ERROR_END_LIST { 0, NULL } };
+
+static const char *const fun2_names[] = {
+    "rand"
+};
+
+static double drand(void *opaque, double min, double max)
+{
+    return min + (max-min) / UINT_MAX * av_lfg_get(opaque);
+}
+
+typedef double (*eval_func2)(void *, double a, double b);
+
+static const eval_func2 fun2[] = {
+    drand,
+    NULL
+};
+
+static const char *const var_names[] = {
+    "line_h", "lh",           ///< line height, same as max_glyph_h
+    "main_h", "h", "H",       ///< height of the input video
+    "main_w", "w", "W",       ///< width  of the input video
+    "max_glyph_a", "ascent",  ///< max glyph ascent
+    "max_glyph_d", "descent", ///< min glyph descent
+    "max_glyph_h",            ///< max glyph height
+    "max_glyph_w",            ///< max glyph width
+    "text_h", "th",           ///< height of the rendered text
+    "text_w", "tw",           ///< width  of the rendered text
+    "x",
+    "y",
+    NULL
+};
+
+enum var_name {
+    VAR_LINE_H, VAR_LH,
+    VAR_MAIN_H, VAR_h, VAR_H,
+    VAR_MAIN_W, VAR_w, VAR_W,
+    VAR_MAX_GLYPH_A, VAR_ASCENT,
+    VAR_MAX_GLYPH_D, VAR_DESCENT,
+    VAR_MAX_GLYPH_H,
+    VAR_MAX_GLYPH_W,
+    VAR_TEXT_H, VAR_TH,
+    VAR_TEXT_W, VAR_TW,
+    VAR_X,
+    VAR_Y,
+    VAR_VARS_NB
+};
 
 static const struct ft_error {
     int err;
@@ -141,6 +182,8 @@ typedef struct
 #endif
     uint8_t *fontfile;              ///< font to be used
     uint8_t *text;                  ///< text to be drawn
+    uint8_t *fontcolor_expr;        ///< fontcolor expression to evaluate
+    AVBPrint expanded_fontcolor;    ///< used to contain the expanded fontcolor spec
     FT_Vector *positions;           ///< positions for each element in the text
     size_t nb_positions;            ///< number of elements of positions array
     int ft_load_flags;              ///< flags used for loading fonts, see FT_LOAD_*
@@ -151,12 +194,23 @@ typedef struct
     int max_glyph_h;                ///< max glyph height
     int shadowx, shadowy;
     int borderw;                    ///< border width
+    double var_values[VAR_VARS_NB];
+    int alpha;
+    AVLFG  prng;                    ///< random
+
+    FFDrawContext dc;
+    FFDrawColor fontcolor;          ///< foreground color
+    FFDrawColor shadowcolor;        ///< shadow color
+    FFDrawColor bordercolor;        ///< border color
+    FFDrawColor boxcolor;           ///< background color
 
     FT_Library library;             ///< freetype font library handle
     FT_Face face;                   ///< freetype font face handle
     FT_Stroker stroker;             ///< freetype stroker handle
     struct AVTreeNode *glyphs;      ///< rendered glyphs, stored using the UTF-32 char code
 
+    char *fontsize_expr;            ///< expression for fontsize
+    AVExpr *fontsize_pexpr;         ///< parsed expressions for fontsize
     unsigned int fontsize;          ///< font size to use
     unsigned int default_fontsize;  ///< default font size to use
 
@@ -189,8 +243,10 @@ static const AVOption gldrawtext_options[] = {
     {"fontfile",    "set font file",        OFFSET(fontfile),           AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS},
     {"text",        "set text",             OFFSET(text),               AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS},
     {"textfile",    "set text file",        OFFSET(textfile),           AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS},
+    {"fontcolor",   "set foreground color", OFFSET(fontcolor.rgba),     AV_OPT_TYPE_COLOR,  {.str="black"}, 0, 0, FLAGS},
+    {"fontcolor_expr", "set foreground color expression", OFFSET(fontcolor_expr), AV_OPT_TYPE_STRING, {.str=""}, 0, 0, FLAGS},
     {"line_spacing",  "set line spacing in pixels", OFFSET(line_spacing),   AV_OPT_TYPE_INT,    {.i64=0},     INT_MIN,  INT_MAX,FLAGS},
-    {"fontsize",    "set font size",        OFFSET(fontsize),      AV_OPT_TYPE_INT, {.i64= 32 },  0, 1024, FLAGS},
+    {"fontsize",    "set font size",        OFFSET(fontsize_expr),      AV_OPT_TYPE_STRING, {.str=NULL},  0, 0 , FLAGS},
     {"x",           "set x",     OFFSET(x),             AV_OPT_TYPE_INT, {.i64= 0 },   0, 4096, FLAGS},
     {"y",           "set y",     OFFSET(y),             AV_OPT_TYPE_INT, {.i64= 0 },   0, 4096, FLAGS},
     {"tabsize",     "set tab size",         OFFSET(tabsize),            AV_OPT_TYPE_INT,    {.i64=4},     0,        INT_MAX , FLAGS},
@@ -198,6 +254,7 @@ static const AVOption gldrawtext_options[] = {
     { "font",        "Font name",            OFFSET(font),               AV_OPT_TYPE_STRING, { .str = "Sans" },           .flags = FLAGS },
 #endif
     {"reload",     "reload text file for each frame",                       OFFSET(reload),     AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGS},
+    { "alpha",       "apply alpha while rendering", OFFSET(alpha),      AV_OPT_TYPE_INT, {.i64 = 255}, 0, 255, FLAGS},
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(gldrawtext);
@@ -439,12 +496,49 @@ static av_cold int set_fontsize(AVFilterContext *ctx, unsigned int fontsize)
     return 0;
 }
 
+static av_cold int parse_fontsize(AVFilterContext *ctx)
+{
+    GlDrawTextContext *s = ctx->priv;
+    int err;
+
+    if (s->fontsize_pexpr)
+        return 0;
+
+    if (s->fontsize_expr == NULL)
+        return AVERROR(EINVAL);
+
+    if ((err = av_expr_parse(&s->fontsize_pexpr, s->fontsize_expr, var_names,
+                             NULL, NULL, fun2_names, fun2, 0, ctx)) < 0)
+        return err;
+
+    return 0;
+}
+
 static av_cold int update_fontsize(AVFilterContext *ctx)
 {
     GlDrawTextContext *s = ctx->priv;
     unsigned int fontsize = s->default_fontsize;
     int err;
     double size, roundedsize;
+
+    // if no fontsize specified use the default
+    if (s->fontsize_expr != NULL) {
+        if ((err = parse_fontsize(ctx)) < 0)
+           return err;
+
+        size = av_expr_eval(s->fontsize_pexpr, s->var_values, &s->prng);
+
+        if (!isnan(size)) {
+            roundedsize = round(size);
+            // test for overflow before cast
+            if (!(roundedsize > INT_MIN && roundedsize < INT_MAX)) {
+                av_log(ctx, AV_LOG_ERROR, "fontsize overflow\n");
+                return AVERROR(EINVAL);
+            }
+
+            fontsize = roundedsize;
+        }
+    }
 
     if (fontsize == 0)
         fontsize = 1;
@@ -601,6 +695,8 @@ static av_cold int init(AVFilterContext *ctx)
     }
     s->tabsize *= glyph->advance;
 
+    av_bprint_init(&s->expanded_fontcolor, 0, AV_BPRINT_SIZE_UNLIMITED);
+
     return 0;
 }
 
@@ -617,6 +713,12 @@ static int config_props(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
     GlDrawTextContext *gs = ctx->priv;
+
+    ff_draw_init(&gs->dc, inlink->format, FF_DRAW_PROCESS_ALPHA);
+    ff_draw_color(&gs->dc, &gs->fontcolor,   gs->fontcolor.rgba);
+    ff_draw_color(&gs->dc, &gs->shadowcolor, gs->shadowcolor.rgba);
+    ff_draw_color(&gs->dc, &gs->bordercolor, gs->bordercolor.rgba);
+    ff_draw_color(&gs->dc, &gs->boxcolor,    gs->boxcolor.rgba);
 
 #ifdef GL_TRANSITION_USING_EGL
     //init EGL
@@ -747,6 +849,58 @@ static int config_props(AVFilterLink *inlink)
     return 0;
 }
 
+static int draw_glyphs(GlDrawTextContext *s, AVFrame *frame,
+                       int width, int height,
+                       FFDrawColor *color,
+                       int x, int y, int borderw)
+{
+    char *text = s->text;
+    uint32_t code = 0;
+    int i, x1, y1;
+    uint8_t *p;
+    Glyph *glyph = NULL;
+
+    for (i = 0, p = text; *p; i++) {
+        FT_Bitmap bitmap;
+        Glyph dummy = { 0 };
+        GET_UTF8(code, *p ? *p++ : 0, code = 0xfffd; goto continue_on_invalid;);
+continue_on_invalid:
+
+        /* skip new line chars, just go to new line */
+        if (code == '\n' || code == '\r' || code == '\t')
+            continue;
+
+        dummy.code = code;
+        dummy.fontsize = s->fontsize;
+        glyph = av_tree_find(s->glyphs, &dummy, glyph_cmp, NULL);
+
+        bitmap = borderw ? glyph->border_bitmap : glyph->bitmap;
+
+        if (glyph->bitmap.pixel_mode != FT_PIXEL_MODE_MONO &&
+            glyph->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY)
+            return AVERROR(EINVAL);
+
+        x1 = s->positions[i].x+s->x+x - borderw;
+        y1 = s->positions[i].y+s->y+y - borderw;
+
+        ff_blend_mask(&s->dc, color,
+                      frame->data, frame->linesize, width, height,
+                      bitmap.buffer, bitmap.pitch,
+                      bitmap.width, bitmap.rows,
+                      bitmap.pixel_mode == FT_PIXEL_MODE_MONO ? 0 : 3,
+                      0, x1, y1);
+    }
+
+    return 0;
+}
+
+static void update_color_with_alpha(GlDrawTextContext *s, FFDrawColor *color, const FFDrawColor incolor)
+{
+    *color = incolor;
+    color->rgba[3] = (color->rgba[3] * s->alpha) / 255;
+    ff_draw_color(&s->dc, color, color->rgba);
+}
+
 static int draw_text(AVFilterContext *ctx, AVFrame *frame,
                      int width, int height)
 {
@@ -762,7 +916,34 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame,
     int x_min = 32000, x_max = -32000;
     FT_Vector delta;
     Glyph *glyph = NULL, *prev_glyph = NULL;
-    Glyph dummy = { 0 };  
+    Glyph dummy = { 0 }; 
+
+    FFDrawColor fontcolor;
+    FFDrawColor shadowcolor;
+    FFDrawColor bordercolor;
+    FFDrawColor boxcolor; 
+
+    text = s->text;
+
+    if ((len = strlen(s->text)) > s->nb_positions) {
+        av_log(NULL, AV_LOG_ERROR, "av_realloc: len %d, size %d\n", len, len*sizeof(*s->positions));
+        if (!(s->positions =
+              av_realloc(s->positions, len*sizeof(*s->positions))))
+            return AVERROR(ENOMEM);
+        s->nb_positions = len;
+    }
+
+    if (s->fontcolor_expr[0]) {
+        /* If expression is set, evaluate and replace the static value */
+        av_bprint_clear(&s->expanded_fontcolor);
+        if (!av_bprint_is_complete(&s->expanded_fontcolor))
+            return AVERROR(ENOMEM);
+        av_log(s, AV_LOG_DEBUG, "Evaluated fontcolor is '%s'\n", s->expanded_fontcolor.str);
+        ret = av_parse_color(s->fontcolor.rgba, s->expanded_fontcolor.str, -1, s);
+        if (ret)
+            return ret;
+        ff_draw_color(&s->dc, &s->fontcolor, s->fontcolor.rgba);
+    }
 
     x = 0;
     y = 0;
@@ -818,13 +999,6 @@ continue_on_invalid2:
         dummy.fontsize = s->fontsize;
         glyph = av_tree_find(s->glyphs, &dummy, glyph_cmp, NULL);
 
-        /* kerning */
-        if (s->use_kerning && prev_glyph && glyph->code) {
-            FT_Get_Kerning(s->face, prev_glyph->code, glyph->code,
-                           ft_kerning_default, &delta);
-            x += delta.x >> 6;
-        }
-
         /* save position */
         s->positions[i].x = x + glyph->bitmap_left;
         s->positions[i].y = y - glyph->bitmap_top + y_max;
@@ -834,9 +1008,27 @@ continue_on_invalid2:
 
     max_text_line_w = FFMAX(x, max_text_line_w); 
 
+    update_color_with_alpha(s, &fontcolor  , s->fontcolor  );
+    update_color_with_alpha(s, &shadowcolor, s->shadowcolor);
+    update_color_with_alpha(s, &bordercolor, s->bordercolor);
+    update_color_with_alpha(s, &boxcolor   , s->boxcolor   );
+
     box_w = max_text_line_w;
     box_h = y + s->max_glyph_h;
-    av_log(NULL, AV_LOG_ERROR, "box_w %d, box_h %d\n", box_w, box_h);
+
+    static int once = 1;
+    if (once) {
+        av_log(NULL, AV_LOG_ERROR, "s->fontcolor: %d %d %d %d\n", s->fontcolor.rgba[0], s->fontcolor.rgba[1], s->fontcolor.rgba[2], s->fontcolor.rgba[3]);
+        av_log(NULL, AV_LOG_ERROR, "fontcolor: %d %d %d %d\n", fontcolor.rgba[0], fontcolor.rgba[1], fontcolor.rgba[2], fontcolor.rgba[3]);
+        av_log(NULL, AV_LOG_ERROR, "box_w %d, box_h %d\n", box_w, box_h);
+        once = 0;
+    }
+    
+
+    if ((ret = draw_glyphs(s, frame, width, height,
+                           &fontcolor, 0, 0, 0)) < 0)
+        return ret;
+
     return 0;
 }
 
@@ -853,15 +1045,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
     av_frame_copy_props(out, in);
 
+    draw_text(ctx, in, inlink->w, inlink->h);
+
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
-
-    static int once = 0;
-    if (!once) {
-        draw_text(ctx, out, inlink->w, inlink->h);
-        once = 1;
-    }
 
     av_frame_free(&in);
     return ff_filter_frame(outlink, out);
@@ -891,6 +1079,8 @@ static av_cold void uninit(AVFilterContext *ctx)
     FT_Done_Face(gs->face);
     FT_Stroker_Done(gs->stroker);
     FT_Done_FreeType(gs->library);
+
+    av_bprint_finalize(&gs->expanded_fontcolor, NULL);
 
 #ifdef GL_TRANSITION_USING_EGL
     if (gs->eglDpy) {
