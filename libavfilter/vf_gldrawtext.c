@@ -96,12 +96,44 @@ static const GLchar *f_shader_source =
     "}\n";
 
 static const GLchar *text_v_shader_source =
-    "attribute vec4 pos_tex;\n"
+    "attribute vec2 a_tex;\n"
     "varying vec2 texCoord;\n"
     "void main(void) {\n"
-    "  gl_Position = vec4(pos_tex.xy, 0, 1);\n"
-    "  texCoord = vec2(pos_tex.z, 1.0 - pos_tex.w);\n"
+    "  texCoord = vec2(a_tex.x, 1.0 - a_tex.y);\n"
+    "  vec2 tmp = a_tex;\n"
+    "  gl_Position = vec4((a_tex - 0.5) * 2.0, 0, 1);\n"
     "}\n";
+
+static const GLchar *text_f_shader_source_default =
+    "uniform sampler2D tex;\n"
+    "varying vec2 texCoord;\n"
+    "uniform int u_Time;\n"
+    "void main() {\n"
+    "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
+    "  gl_FragColor = texture2D(tex, uv);\n"
+    "}\n";
+
+static const GLchar *text_f_shader_source_wave =
+    "uniform sampler2D tex;\n"
+    "varying vec2 texCoord;\n"
+    "uniform int u_Time;\n"
+    "uniform vec3 u_param;\n"
+    "#define PI 3.1415926535\n"
+    "\n"
+    "void main() {\n"
+    "  float f = 1.5;  //freq\n"
+    "  float v = 3.0;  //speed\n"
+    "  vec2 uv0 = vec2(texCoord.x, 1.0 - texCoord.y);\n"
+    "  vec2 uv;"
+    "  if (u_param.x < 0.1)\n"
+    "    uv = vec2(uv0.x, uv0.y + u_param.z * sin(f * PI * uv0.x - 2.0 * PI * u_param.y));\n"
+    "  else\n"
+    "    uv = vec2(uv0.x + u_param.z * sin(f * PI * uv0.y + 2.0 * PI * u_param.y), uv0.y);\n"
+    "\n"
+    "  gl_FragColor = texture2D(tex, uv);\n"
+    "}\n";
+
+    
 
 #undef __FTERRORS_H__
 #define FT_ERROR_START_LIST {
@@ -181,10 +213,13 @@ typedef struct
 {
     const AVClass *class;
     GLuint program;
-    GLunit program_text;
+    GLuint program_text;
     GLuint frame_tex;
     GLuint pos_buf;
-    GLint pos_type;
+    GLuint postex_buf;
+
+    GLint time;
+    GLint param;
 
 #if CONFIG_LIBFONTCONFIG
     uint8_t *font;                  ///< font to be used
@@ -585,6 +620,7 @@ static GLuint build_shader(AVFilterContext *ctx, const GLchar *shader_source, GL
 
     return compileResult == GL_TRUE ? shader : 0;
 }
+
 static void vbo_setup(GlDrawTextContext *gs)
 {
     glGenBuffers(1, &gs->pos_buf);
@@ -592,6 +628,47 @@ static void vbo_setup(GlDrawTextContext *gs)
     glBufferData(GL_ARRAY_BUFFER, sizeof(position), position, GL_STATIC_DRAW);
 
     GLint loc = glGetAttribLocation(gs->program, "position");
+    glEnableVertexAttribArray(loc);
+    glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
+}
+
+static void vbo_text_setup(GlDrawTextContext *gs, int width, int height, int x, int y, int box_w, int box_h)
+{
+    float pos_tex[12] = {
+        0.0f, 1.0f,
+        1.0f, 1.0f,
+        0.0f, 0.0f, 
+        0.0f, 0.0f,
+        1.0f, 1.0f,
+        1.0f, 0.0f
+    };
+
+    pos_tex[0]  = (float)x / width;
+    pos_tex[1]  = (y + box_h) / (float)height;
+    pos_tex[2]  = (x + box_w) / (float)width;
+    pos_tex[3]  = pos_tex[1];
+
+    pos_tex[4] = pos_tex[0];
+    pos_tex[5] = (float)y / height;
+    pos_tex[6] = pos_tex[0];
+    pos_tex[7] = pos_tex[5];
+    
+    pos_tex[8] = pos_tex[2];
+    pos_tex[9] = pos_tex[1];
+    pos_tex[10] = pos_tex[2];
+    pos_tex[11] = pos_tex[5];
+
+    av_log(NULL, AV_LOG_ERROR, "vbo_text_setup: %d x %d, %d %d %d %d\n", width, height, x, y, box_w, box_h);
+    for (int i=0;i<6;i++) {
+        av_log(NULL, AV_LOG_ERROR, "#%d: %.2f, %.2f\n", 
+            i * 2, pos_tex[i * 2 + 0], pos_tex[i * 2 + 1]);
+    }
+
+    glGenBuffers(1, &gs->postex_buf);
+    glBindBuffer(GL_ARRAY_BUFFER, gs->postex_buf);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(pos_tex), pos_tex, GL_STATIC_DRAW);
+
+    GLint loc = glGetAttribLocation(gs->program_text, "a_tex");
     glEnableVertexAttribArray(loc);
     glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
 }
@@ -632,7 +709,7 @@ static int build_program(AVFilterContext *ctx, GLuint *program, const char* vs, 
     glLinkProgram(prog);
 
     GLint status;
-    glGetProgramiv(gs->program, GL_LINK_STATUS, &status);
+    glGetProgramiv(prog, GL_LINK_STATUS, &status);
     if (status == GL_TRUE) {
         *program = prog;
         return 0;
@@ -719,8 +796,11 @@ static void setup_uniforms(AVFilterLink *fromLink)
     AVFilterContext *ctx = fromLink->dst;
     GlDrawTextContext *gs = ctx->priv;
 
-    gs->pos_type = glGetUniformLocation(gs->program, "type");
-    glUniform1i(gs->pos_type, gs->type);
+    gs->time = glGetUniformLocation(gs->program, "u_Time");
+    glUniform1i(gs->time, 0.0f);
+
+    gs->param = glGetUniformLocation(gs->program, "u_param");
+    glUniform3f(gs->param, 0.0f, 0.0f, 0.0f);
 }
 
 static int config_props(AVFilterLink *inlink)
@@ -850,12 +930,12 @@ static int config_props(AVFilterLink *inlink)
     glViewport(0, 0, inlink->w, inlink->h);
 
     int ret;
-    if ((ret = build_program(ctx, v_shader_source, f_shader_source, &gs->program)) < 0)
+    if ((ret = build_program(ctx, &gs->program, v_shader_source, f_shader_source)) < 0)
     {
         av_log(NULL, AV_LOG_ERROR, "failed to build ogl program: %d\n", ret);
         return ret;
     }
-    if ((ret = build_program(ctx, text_v_shader_source, f_shader_source, &gs->program_text)) < 0)
+    if ((ret = build_program(ctx, &gs->program_text, text_v_shader_source, text_f_shader_source_wave)) < 0)
     {
         av_log(NULL, AV_LOG_ERROR, "failed to build ogl text program: %d\n", ret);
         return ret;
@@ -945,7 +1025,7 @@ static int draw_text(AVFilterContext *ctx, AVFrame *frame,
     text = s->text;
 
     if ((len = strlen(s->text)) > s->nb_positions) {
-        av_log(NULL, AV_LOG_ERROR, "av_realloc: len %d, size %d\n", len, len*sizeof(*s->positions));
+        av_log(NULL, AV_LOG_ERROR, "av_realloc: len %d, size %ld\n", len, len*sizeof(*s->positions));
         if (!(s->positions =
               av_realloc(s->positions, len*sizeof(*s->positions))))
             return AVERROR(ENOMEM);
@@ -1039,17 +1119,19 @@ continue_on_invalid2:
     if (once) {
         av_log(NULL, AV_LOG_ERROR, "s->fontcolor: %d %d %d %d\n", s->fontcolor.rgba[0], s->fontcolor.rgba[1], s->fontcolor.rgba[2], s->fontcolor.rgba[3]);
         av_log(NULL, AV_LOG_ERROR, "fontcolor: %d %d %d %d\n", fontcolor.rgba[0], fontcolor.rgba[1], fontcolor.rgba[2], fontcolor.rgba[3]);
-        av_log(NULL, AV_LOG_ERROR, "box_w %d, box_h %d\n", box_w, box_h);
+        av_log(NULL, AV_LOG_ERROR, "x: %d, y: %d, box_w: %d, box_h: %d\n", s->x, s->y, box_w, box_h);
+
+        vbo_text_setup(s, width, height, s->x, s->y, box_w, box_h);
+
         once = 0;
     }
-    
 
     if ((ret = draw_glyphs(s, frame, width, height,
                            &fontcolor, 0, 0, 0)) < 0)
         return ret;
 
     // render it!!!
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, frame->data[0]);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
     return 0;
@@ -1059,6 +1141,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
     AVFilterLink *outlink = ctx->outputs[0];
+    GlDrawTextContext *gs = ctx->priv;
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
     if (!out)
@@ -1072,8 +1155,17 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     glUseProgram(gs->program);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
+    const float time = in->pts * av_q2d(inlink->time_base);
+    glUniform1f(gs->time, time);
+
+    if (gs->max_glyph_h > 0) {
+        //float altitude = 0.2 * gs->max_glyph_h; // 振幅（altitude单位：像素）
+        //float extraH = altitude * 2.0;
+        //glUniform3f(gs->param, 1.0f, time, altitude / (/*rect_height*/gs->max_glyph_h + extraH));
+    }
+    
     glUseProgram(gs->program_text);
-    draw_text(ctx, in, inlink->w, inlink->h);
+    //draw_text(ctx, in, inlink->w, inlink->h);
 
     glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
 
