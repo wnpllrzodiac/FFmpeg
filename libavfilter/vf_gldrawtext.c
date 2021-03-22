@@ -9,6 +9,8 @@
 #include "internal.h"
 #include "glutil.h"
 
+// ./ffplay /mnt/d/Archive/Media/TimeCode.mov -vf scale=640x480,gldrawtext=text=Hello你好吗:fontsize=72:fontcolor=green:fontfile=msyh.ttc -an
+
 #if CONFIG_LIBFONTCONFIG
 #include <fontconfig/fontconfig.h>
 #endif
@@ -89,51 +91,20 @@ static const GLchar *v_shader_source =
 static const GLchar *f_shader_source =
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
-    "uniform int type;\n"
-    "void main() {\n"
-    "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
-    "  gl_FragColor = texture2D(tex, uv);\n"
-    "}\n";
-
-static const GLchar *text_v_shader_source =
-    "attribute vec2 a_tex;\n"
-    "varying vec2 texCoord;\n"
-    "void main(void) {\n"
-    "  texCoord = vec2(a_tex.x, 1.0 - a_tex.y);\n"
-    "  vec2 tmp = a_tex;\n"
-    "  gl_Position = vec4((a_tex - 0.5) * 2.0, 0, 1);\n"
-    "}\n";
-
-static const GLchar *text_f_shader_source_default =
-    "uniform sampler2D tex;\n"
-    "varying vec2 texCoord;\n"
     "uniform int u_Time;\n"
-    "void main() {\n"
-    "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
-    "  gl_FragColor = texture2D(tex, uv);\n"
-    "}\n";
-
-static const GLchar *text_f_shader_source_wave =
-    "uniform sampler2D tex;\n"
-    "varying vec2 texCoord;\n"
-    "uniform int u_Time;\n"
-    "uniform vec3 u_param;\n"
-    "#define PI 3.1415926535\n"
+    "uniform vec4 u_textPos;\n"
     "\n"
     "void main() {\n"
-    "  float f = 1.5;  //freq\n"
-    "  float v = 3.0;  //speed\n"
-    "  vec2 uv0 = vec2(texCoord.x, 1.0 - texCoord.y);\n"
-    "  vec2 uv;"
-    "  if (u_param.x < 0.1)\n"
-    "    uv = vec2(uv0.x, uv0.y + u_param.z * sin(f * PI * uv0.x - 2.0 * PI * u_param.y));\n"
+    "  float x_min = u_textPos.x;\n"
+    "  float y_min = u_textPos.y;\n"
+    "  float x_max = x_min + u_textPos.z;\n"
+    "  float y_max = y_min + u_textPos.w;\n"
+    "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
+    "  if (uv.x > x_min && uv.x < x_max && uv.y > y_min && uv.y < y_max)\n"
+    "    gl_FragColor = texture2D(tex, uv);\n"
     "  else\n"
-    "    uv = vec2(uv0.x + u_param.z * sin(f * PI * uv0.y + 2.0 * PI * u_param.y), uv0.y);\n"
-    "\n"
-    "  gl_FragColor = texture2D(tex, uv);\n"
+    "    gl_FragColor = texture2D(tex, uv);\n"
     "}\n";
-
-    
 
 #undef __FTERRORS_H__
 #define FT_ERROR_START_LIST {
@@ -213,12 +184,12 @@ typedef struct
 {
     const AVClass *class;
     GLuint program;
-    GLuint program_text;
     GLuint frame_tex;
     GLuint pos_buf;
     GLuint postex_buf;
 
     GLint time;
+    GLint u_text_pos;
     GLint param;
 
 #if CONFIG_LIBFONTCONFIG
@@ -632,47 +603,6 @@ static void vbo_setup(GlDrawTextContext *gs)
     glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
 }
 
-static void vbo_text_setup(GlDrawTextContext *gs, int width, int height, int x, int y, int box_w, int box_h)
-{
-    float pos_tex[12] = {
-        0.0f, 1.0f,
-        1.0f, 1.0f,
-        0.0f, 0.0f, 
-        0.0f, 0.0f,
-        1.0f, 1.0f,
-        1.0f, 0.0f
-    };
-
-    pos_tex[0]  = (float)x / width;
-    pos_tex[1]  = (y + box_h) / (float)height;
-    pos_tex[2]  = (x + box_w) / (float)width;
-    pos_tex[3]  = pos_tex[1];
-
-    pos_tex[4] = pos_tex[0];
-    pos_tex[5] = (float)y / height;
-    pos_tex[6] = pos_tex[0];
-    pos_tex[7] = pos_tex[5];
-    
-    pos_tex[8] = pos_tex[2];
-    pos_tex[9] = pos_tex[1];
-    pos_tex[10] = pos_tex[2];
-    pos_tex[11] = pos_tex[5];
-
-    av_log(NULL, AV_LOG_ERROR, "vbo_text_setup: %d x %d, %d %d %d %d\n", width, height, x, y, box_w, box_h);
-    for (int i=0;i<6;i++) {
-        av_log(NULL, AV_LOG_ERROR, "#%d: %.2f, %.2f\n", 
-            i * 2, pos_tex[i * 2 + 0], pos_tex[i * 2 + 1]);
-    }
-
-    glGenBuffers(1, &gs->postex_buf);
-    glBindBuffer(GL_ARRAY_BUFFER, gs->postex_buf);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(pos_tex), pos_tex, GL_STATIC_DRAW);
-
-    GLint loc = glGetAttribLocation(gs->program_text, "a_tex");
-    glEnableVertexAttribArray(loc);
-    glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
-}
-
 static void tex_setup(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
@@ -798,6 +728,9 @@ static void setup_uniforms(AVFilterLink *fromLink)
 
     gs->time = glGetUniformLocation(gs->program, "u_Time");
     glUniform1i(gs->time, 0.0f);
+
+    gs->u_text_pos = glGetUniformLocation(gs->program, "u_textPos");
+    glUniform4f(gs->u_text_pos, 0.0f, 0.0f, 0.0f, 0.0f);
 
     gs->param = glGetUniformLocation(gs->program, "u_param");
     glUniform3f(gs->param, 0.0f, 0.0f, 0.0f);
@@ -935,11 +868,6 @@ static int config_props(AVFilterLink *inlink)
         av_log(NULL, AV_LOG_ERROR, "failed to build ogl program: %d\n", ret);
         return ret;
     }
-    if ((ret = build_program(ctx, &gs->program_text, text_v_shader_source, text_f_shader_source_wave)) < 0)
-    {
-        av_log(NULL, AV_LOG_ERROR, "failed to build ogl text program: %d\n", ret);
-        return ret;
-    }
 
     glUseProgram(gs->program);
     vbo_setup(gs);
@@ -1001,7 +929,8 @@ static void update_color_with_alpha(GlDrawTextContext *s, FFDrawColor *color, co
 }
 
 static int draw_text(AVFilterContext *ctx, AVFrame *frame,
-                     int width, int height)
+                     int width, int height,
+                     float time)
 {
     GlDrawTextContext *s = ctx->priv;
 
@@ -1121,18 +1050,26 @@ continue_on_invalid2:
         av_log(NULL, AV_LOG_ERROR, "fontcolor: %d %d %d %d\n", fontcolor.rgba[0], fontcolor.rgba[1], fontcolor.rgba[2], fontcolor.rgba[3]);
         av_log(NULL, AV_LOG_ERROR, "x: %d, y: %d, box_w: %d, box_h: %d\n", s->x, s->y, box_w, box_h);
 
-        vbo_text_setup(s, width, height, s->x, s->y, box_w, box_h);
+        float text_x, text_y, text_w, text_h;
+        text_x = (float)s->x / width;
+        text_y = (float)s->y / height;
+        text_w = (float)box_w / width;
+        text_h = (float)box_h / height;
+        glUniform4f(s->u_text_pos, text_x, text_y, text_w, text_h);
+        av_log(NULL, AV_LOG_ERROR, "glUniform4f: #%d: %.2f %.2f %.2f %.2f\n", 
+            s->u_text_pos, text_x, text_y, text_w, text_h);
 
         once = 0;
+    }
+
+    if (s->max_glyph_h > 0) {
+        float altitude = 0.2 * s->max_glyph_h / width; // 振幅（altitude单位：像素）
+        glUniform3f(s->param, 1.0f, time, altitude);
     }
 
     if ((ret = draw_glyphs(s, frame, width, height,
                            &fontcolor, 0, 0, 0)) < 0)
         return ret;
-
-    // render it!!!
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, frame->data[0]);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
 
     return 0;
 }
@@ -1151,21 +1088,17 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
     av_frame_copy_props(out, in);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
-    glUseProgram(gs->program);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    //glDrawArrays(GL_TRIANGLES, 0, 6);
 
     const float time = in->pts * av_q2d(inlink->time_base);
     glUniform1f(gs->time, time);
-
-    if (gs->max_glyph_h > 0) {
-        //float altitude = 0.2 * gs->max_glyph_h; // 振幅（altitude单位：像素）
-        //float extraH = altitude * 2.0;
-        //glUniform3f(gs->param, 1.0f, time, altitude / (/*rect_height*/gs->max_glyph_h + extraH));
-    }
     
-    glUseProgram(gs->program_text);
-    //draw_text(ctx, in, inlink->w, inlink->h);
+    draw_text(ctx, in, inlink->w, inlink->h, time);
+
+    // render it!!!
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
 
