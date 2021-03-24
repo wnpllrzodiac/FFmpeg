@@ -9,8 +9,8 @@
 #include "internal.h"
 #include "glutil.h"
 
-// ./ffplay /mnt/d/Archive/Media/TimeCode.mov -vf scale=640x480,gldrawtext=text=Hello你好吗:fontsize=72:fontcolor=green:fontfile=msyh.ttc -an
-
+// ./ffplay /mnt/d/Archive/Media/TimeCode.mov -vf scale=640x480,gldrawtext=text='太太太太重要了!!!':
+//   fontsize=36:fontcolor=white:fontfile=local_华康金刚黑.ttf:x=100:y=200:borderw=6:bordercolor=red -an
 #if CONFIG_LIBFONTCONFIG
 #include <fontconfig/fontconfig.h>
 #endif
@@ -260,10 +260,12 @@ static const AVOption gldrawtext_options[] = {
     {"textfile",    "set text file",        OFFSET(textfile),           AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS},
     {"fontcolor",   "set foreground color", OFFSET(fontcolor.rgba),     AV_OPT_TYPE_COLOR,  {.str="black"}, 0, 0, FLAGS},
     {"fontcolor_expr", "set foreground color expression", OFFSET(fontcolor_expr), AV_OPT_TYPE_STRING, {.str=""}, 0, 0, FLAGS},
+    {"bordercolor", "set border color",     OFFSET(bordercolor.rgba),   AV_OPT_TYPE_COLOR,  {.str="black"}, 0, 0, FLAGS},
     {"line_spacing",  "set line spacing in pixels", OFFSET(line_spacing),   AV_OPT_TYPE_INT,    {.i64=0},     INT_MIN,  INT_MAX,FLAGS},
     {"fontsize",    "set font size",        OFFSET(fontsize_expr),      AV_OPT_TYPE_STRING, {.str=NULL},  0, 0 , FLAGS},
     {"x",           "set x",     OFFSET(x),             AV_OPT_TYPE_INT, {.i64= 0 },   0, 4096, FLAGS},
     {"y",           "set y",     OFFSET(y),             AV_OPT_TYPE_INT, {.i64= 0 },   0, 4096, FLAGS},
+    {"borderw",     "set border width",     OFFSET(borderw),            AV_OPT_TYPE_INT,    {.i64=0},     INT_MIN,  INT_MAX , FLAGS},
     {"tabsize",     "set tab size",         OFFSET(tabsize),            AV_OPT_TYPE_INT,    {.i64=4},     0,        INT_MAX , FLAGS},
 #if CONFIG_LIBFONTCONFIG
     { "font",        "Font name",            OFFSET(font),               AV_OPT_TYPE_STRING, { .str = "Sans" },           .flags = FLAGS },
@@ -706,6 +708,15 @@ static av_cold int init(AVFilterContext *ctx)
     if ((err = update_fontsize(ctx)) < 0)
         return err;
 
+    if (s->borderw) {
+        if (FT_Stroker_New(s->library, &s->stroker)) {
+            av_log(ctx, AV_LOG_ERROR, "Coult not init FT stroker\n");
+            return AVERROR_EXTERNAL;
+        }
+        FT_Stroker_Set(s->stroker, s->borderw << 6, FT_STROKER_LINECAP_ROUND,
+                       FT_STROKER_LINEJOIN_ROUND, 0);
+    }
+
     /* load the fallback glyph with code 0 */
     load_glyph(ctx, NULL, 0);
 
@@ -879,7 +890,8 @@ static int config_props(AVFilterLink *inlink)
 static int draw_glyphs(GlDrawTextContext *s, AVFrame *frame,
                        int width, int height,
                        FFDrawColor *color,
-                       int x, int y, int borderw)
+                       int x, int y, int borderw,
+                       float time)
 {
     char *text = s->text;
     uint32_t code = 0;
@@ -909,6 +921,10 @@ continue_on_invalid:
 
         x1 = s->positions[i].x+s->x+x - borderw;
         y1 = s->positions[i].y+s->y+y - borderw;
+        float gap = 5.0 / strlen(s->text);
+        int idx = (int)(time / gap);
+        if (time < 5.0 && i == idx)
+            y1 += (-100 * (time - gap * idx) / 2.0);
 
         ff_blend_mask(&s->dc, color,
                       frame->data, frame->linesize, width, height,
@@ -1005,6 +1021,20 @@ continue_on_invalid:
     /* compute and save position for each glyph */
     glyph = NULL;
     for (i = 0, p = text; *p; i++) {
+        /*
+        if (time < 5.0) {
+            int err;
+            if ((err = FT_Set_Pixel_Sizes(s->face, 0, s->fontsize + 100))) {
+                av_log(ctx, AV_LOG_ERROR, "Could not set font size to %d pixels: %s\n",
+                    s->fontsize + 20, FT_ERRMSG(err));
+                return AVERROR(EINVAL);
+            }
+        }
+        else {
+            FT_Set_Pixel_Sizes(s->face, 0, s->fontsize);
+        }
+        */
+
         GET_UTF8(code, *p ? *p++ : 0, code = 0xfffd; goto continue_on_invalid2;);
 continue_on_invalid2:
 
@@ -1067,8 +1097,13 @@ continue_on_invalid2:
         glUniform3f(s->param, 1.0f, time, altitude);
     }
 
+    if (s->borderw) {
+        if ((ret = draw_glyphs(s, frame, width, height,
+                               &bordercolor, 0, 0, s->borderw, time)) < 0)
+            return ret;
+    }
     if ((ret = draw_glyphs(s, frame, width, height,
-                           &fontcolor, 0, 0, 0)) < 0)
+                           &fontcolor, 0, 0, 0, time)) < 0)
         return ret;
 
     return 0;
