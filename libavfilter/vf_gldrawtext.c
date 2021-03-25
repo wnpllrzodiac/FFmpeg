@@ -11,6 +11,12 @@
 
 // ./ffplay /mnt/d/Archive/Media/TimeCode.mov -vf scale=640x480,gldrawtext=text='太太太太重要了!!!':
 //   fontsize=36:fontcolor=white:fontfile=local_华康金刚黑.ttf:x=100:y=200:borderw=6:bordercolor=red -an
+
+// ffmpeg -y -f lavfi -i color=c=green:size=320x240 -vf gldrawtext=text='太太太太重要了!!!':
+//    fontsize=48:y=4:fontcolor=white:fontfile=msyh.ttc:borderw=3:bordercolor=red,chromakey=color=green:similarity=0.15 -t 5 -f apng out.png
+// ffmpeg -i /mnt/d/Archive/Media/timecode.3gp -i out.png -filter_complex [0:v][1:v]overlay[outv] 
+//    -map [outv] -map 0:a -c:v libx264 -b:v 512k -c:a copy -t 10 out.mp4
+
 #if CONFIG_LIBFONTCONFIG
 #include <fontconfig/fontconfig.h>
 #endif
@@ -48,7 +54,7 @@ static const EGLint configAttribs[] = {
     EGL_RED_SIZE,   8,
     EGL_GREEN_SIZE, 8,
     EGL_BLUE_SIZE,  8,
-    //EGL_ALPHA_SIZE, 8,// if you need the alpha channel
+    EGL_ALPHA_SIZE, 8,// if you need the alpha channel
     EGL_DEPTH_SIZE, 8,// if you need the depth buffer
     EGL_STENCIL_SIZE,8,
     EGL_NONE
@@ -59,6 +65,7 @@ static const EGLint configAttribs[] = {
     EGL_BLUE_SIZE, 8,
     EGL_GREEN_SIZE, 8,
     EGL_RED_SIZE, 8,
+    EGL_ALPHA_SIZE, 8,// if you need the alpha channel
     EGL_DEPTH_SIZE, 8,
     EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
     EGL_NONE};
@@ -92,18 +99,14 @@ static const GLchar *f_shader_source =
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
     "uniform int u_Time;\n"
-    "uniform vec4 u_textPos;\n"
+    "uniform vec2 eraseUV;\n"
     "\n"
     "void main() {\n"
-    "  float x_min = u_textPos.x;\n"
-    "  float y_min = u_textPos.y;\n"
-    "  float x_max = x_min + u_textPos.z;\n"
-    "  float y_max = y_min + u_textPos.w;\n"
     "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
-    "  if (uv.x > x_min && uv.x < x_max && uv.y > y_min && uv.y < y_max)\n"
-    "    gl_FragColor = texture2D(tex, uv);\n"
+    "  if (uv.x > eraseUV.x)\n"
+    "      gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);\n"
     "  else\n"
-    "    gl_FragColor = texture2D(tex, uv);\n"
+    "      gl_FragColor = texture2D(tex, uv);\n"
     "}\n";
 
 #undef __FTERRORS_H__
@@ -178,7 +181,7 @@ typedef struct Glyph {
     int bitmap_top;
 } Glyph;
 
-#define PIXEL_FORMAT GL_RGB
+#define PIXEL_FORMAT GL_RGBA
 
 typedef struct
 {
@@ -186,11 +189,8 @@ typedef struct
     GLuint program;
     GLuint frame_tex;
     GLuint pos_buf;
-    GLuint postex_buf;
 
     GLint time;
-    GLint u_text_pos;
-    GLint param;
 
 #if CONFIG_LIBFONTCONFIG
     uint8_t *font;                  ///< font to be used
@@ -619,7 +619,7 @@ static void tex_setup(AVFilterLink *inlink)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
 
     glUniform1i(glGetUniformLocation(gs->program, "tex"), 0);
 }
@@ -739,12 +739,6 @@ static void setup_uniforms(AVFilterLink *fromLink)
 
     gs->time = glGetUniformLocation(gs->program, "u_Time");
     glUniform1i(gs->time, 0.0f);
-
-    gs->u_text_pos = glGetUniformLocation(gs->program, "u_textPos");
-    glUniform4f(gs->u_text_pos, 0.0f, 0.0f, 0.0f, 0.0f);
-
-    gs->param = glGetUniformLocation(gs->program, "u_param");
-    glUniform3f(gs->param, 0.0f, 0.0f, 0.0f);
 }
 
 static int config_props(AVFilterLink *inlink)
@@ -921,10 +915,13 @@ continue_on_invalid:
 
         x1 = s->positions[i].x+s->x+x - borderw;
         y1 = s->positions[i].y+s->y+y - borderw;
-        float gap = 5.0 / strlen(s->text);
-        int idx = (int)(time / gap);
-        if (time < 5.0 && i == idx)
-            y1 += (-100 * (time - gap * idx) / 2.0);
+        //float gap = 5.0 / strlen(s->text);
+        //int idx = (int)(time / gap);
+        //if (time < 5.0 && i == idx)
+        //    y1 += (-100 * (time - gap * idx) / 2.0);
+
+        //x1 += (rand() % 20 - 10);
+        //y1 += (rand() % 20 - 10);
 
         ff_blend_mask(&s->dc, color,
                       frame->data, frame->linesize, width, height,
@@ -1080,21 +1077,7 @@ continue_on_invalid2:
         av_log(NULL, AV_LOG_ERROR, "fontcolor: %d %d %d %d\n", fontcolor.rgba[0], fontcolor.rgba[1], fontcolor.rgba[2], fontcolor.rgba[3]);
         av_log(NULL, AV_LOG_ERROR, "x: %d, y: %d, box_w: %d, box_h: %d\n", s->x, s->y, box_w, box_h);
 
-        float text_x, text_y, text_w, text_h;
-        text_x = (float)s->x / width;
-        text_y = (float)s->y / height;
-        text_w = (float)box_w / width;
-        text_h = (float)box_h / height;
-        glUniform4f(s->u_text_pos, text_x, text_y, text_w, text_h);
-        av_log(NULL, AV_LOG_ERROR, "glUniform4f: #%d: %.2f %.2f %.2f %.2f\n", 
-            s->u_text_pos, text_x, text_y, text_w, text_h);
-
         once = 0;
-    }
-
-    if (s->max_glyph_h > 0) {
-        float altitude = 0.2 * s->max_glyph_h / width; // 振幅（altitude单位：像素）
-        glUniform3f(s->param, 1.0f, time, altitude);
     }
 
     if (s->borderw) {
@@ -1131,8 +1114,14 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     
     draw_text(ctx, in, inlink->w, inlink->h, time);
 
+    // 1,0 -> 0,0
+    float v = time / 5.0f;
+    if (v > 1.0)
+        v = 1.0;
+    glUniform2f(glGetUniformLocation(gs->program, "eraseUV"), v, 0.0f);
+
     // render it!!!
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
@@ -1187,7 +1176,7 @@ static av_cold void uninit(AVFilterContext *ctx)
 
 static int query_formats(AVFilterContext *ctx)
 {
-    static const enum AVPixelFormat formats[] = {AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE};
+    static const enum AVPixelFormat formats[] = {AV_PIX_FMT_RGB32, AV_PIX_FMT_NONE};
     return ff_set_common_formats(ctx, ff_make_format_list(formats));
 }
 

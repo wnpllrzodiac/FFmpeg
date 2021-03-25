@@ -3650,7 +3650,7 @@ glripple_filter_deps="glnone_filter"
 glheart_filter_deps="glnone_filter"
 glcommon_filter_deps="glnone_filter"
 glmask_filter_deps="glnone_filter libfreeimage"
-glmask_filter_deps="glnone_filter libfreetype libfontconfig"
+gldrawtext_filter_deps="glnone_filter libfreetype libfontconfig"
 
 # examples
 avio_list_dir_deps="avformat avutil"
