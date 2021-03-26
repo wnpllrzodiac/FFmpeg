@@ -94,7 +94,7 @@ static const GLchar *v_shader_source =
     "  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
     "}\n";
 
-static const GLchar *f_shader_source =
+static const GLchar *f_shader_source = // 向右擦除
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
     "uniform int u_Time;\n"
@@ -107,6 +107,131 @@ static const GLchar *f_shader_source =
     "  else\n"
     "      gl_FragColor = texture2D(tex, uv);\n"
     "}\n";
+
+static const GLchar *f_shader_source_bad_typewriter = // 故障打字机
+    "uniform sampler2D tex;\n"
+    "varying vec2 texCoord;\n"
+    "uniform int u_Time;\n"
+    "uniform float deg;\n"
+    "\n"
+    "void main() {\n"
+    "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
+    "  vec4 curColor = texture2D(tex, uv);\n"
+    "  float progress = deg;\n"
+    "  float cur_progress = progress*0.5;\n"
+    "  vec4 resultColor = curColor;\n"
+    "  if(uv.x<0.5-cur_progress) {\n"
+    "      vec4 edgeColor = texture2D(tex, vec2(0.5-cur_progress,uv.y));\n"
+    "      resultColor = edgeColor;\n"
+    "  }\n"
+    "  else if(uv.x>0.5+cur_progress) {\n"
+    "      vec4 edgeColor = texture2D(tex, vec2(0.5+cur_progress,uv.y));\n"
+    "      resultColor = edgeColor;\n"
+    "  }\n"
+    "  gl_FragColor = resultColor;\n"
+    "}\n";
+
+static const GLchar *f_shader_source_blur = // 模糊
+    "#version 130\n"
+    "precision highp float;\n"
+    "\n"
+    "#define ANIMSEQ 0\n"
+    "\n"
+    "uniform sampler2D tex;\n"
+    "varying vec2 texCoord;\n"
+    "uniform vec2 u_Resolution;\n"
+    "\n"
+    "uniform vec3 param;\n"
+    "uniform vec2 blurDirection;\n"
+    "uniform float blurStep;\n"
+    "uniform float alpha;\n"
+    "\n"
+    "#define BLUR_MOTION 0x1\n"
+    "#define BLUR_SCALE  0x2\n"
+    "#define BLUR_TYPE BLUR_MOTION\n"
+    "\n"
+    "#if BLUR_TYPE == BLUR_SCALE\n"
+    "#define num 25\n"
+    "#else\n"
+    "#define num 15\n"
+    "#endif\n"
+    "\n"
+    "float random(in vec3 scale, in float seed) {\n"
+    "    /* use the fragment position for randomness */\n"
+    "    return fract(sin(dot(gl_FragCoord.xyz + seed, scale)) * 43758.5453 + seed);\n"
+    "}\n"
+    "\n"
+    "vec4 directionBlur(sampler2D tex, vec2 resolution, vec2 uv, vec2 directionOfBlur, float intensity)\n"
+    "{\n"
+    "    vec2 pixelStep = 1.0/resolution * intensity;\n"
+    "    float dircLength = max(length(directionOfBlur), .000001);\n"
+    "	pixelStep.x = directionOfBlur.x * 1.0 / dircLength * pixelStep.x;\n"
+    "	pixelStep.y = directionOfBlur.y * 1.0 / dircLength * pixelStep.y;\n"
+    "\n"
+    "	vec4 color = vec4(0);\n"
+    "	for(int i = -num; i <= num; i++)\n"
+    "	{\n"
+    "        vec2 blurCoord = uv + pixelStep * float(i);\n"
+    "        // vec2 uvT = vec2(1.0 - abs(abs(blurCoord.x) - 1.0), 1.0 - abs(abs(blurCoord.y) - 1.0));\n"
+    "#if ANIMSEQ == 1\n"
+    "        blurCoord.x = clamp(blurCoord.x, 0., 1.);\n"
+    "        blurCoord.y = clamp(blurCoord.y, 0., 1.);\n"
+    "        blurCoord = blurCoord * _MainTex_ST.xy + _MainTex_ST.zw;\n"
+    "#endif\n"
+    "        color += texture2D(tex, blurCoord);\n"
+    "	}\n"
+    "	color /= float(2 * num + 1);	\n"
+    "	return color;\n"
+    "}\n"
+    "\n"
+    "vec4 scaleBlur(vec2 uv) {\n"
+    "    vec4 color = vec4(0.0);\n"
+    "    float total = 0.0;\n"
+    "	vec2 toCenter = vec2(0.5, 0.5) - uv;\n"
+    "    float dissolve = 0.5;\n"
+    "    /* randomize the lookup values to hide the fixed number of samples */\n"
+    "    float offset3 = random(vec3(12.9898, 78.233, 151.7182), 0.0);\n"
+    "\n"
+    "    for (int t = 0; t <= num; t++) {\n"
+    "        float percent = (float(t) + offset3 - .5) / float(num);\n"
+    "        float weight = 4.0 * (percent - percent * percent);\n"
+    "\n"
+    "		vec2 curUV = uv + toCenter * percent * blurStep;\n"
+    "        // vec2 uvT = vec2(1.0 - abs(abs(curUV.x) - 1.0), 1.0 - abs(abs(curUV.y) - 1.0));\n"
+    "\n"
+    "#if ANIMSEQ == 1\n"
+    "        curUV.x = clamp(curUV.x, 0., 1.);\n"
+    "        curUV.y = clamp(curUV.y, 0., 1.);\n"
+    "        curUV = vec4(curUV, 0.0, 1.0);\n"
+    "#endif\n"
+    "        color += texture2D(_MainTex, curUV) * weight;\n"
+    "        // color += crossFade(uvT + toCenter * percent * blurStep, dissolve) * weight;\n"
+    "        total += weight;\n"
+    "    }\n"
+    "    return color / total;\n"
+    "}\n"
+    "\n"
+    "void main()\n"
+    "{\n"
+    "    vec2 uv0 = vec2(texCoord.x, 1.0 - texCoord.y);\n"
+    "    vec4 color = vec4(0);\n"
+    "#if BLUR_TYPE == BLUR_MOTION\n"
+    "    color = directionBlur(tex, u_Resolution, uv0, blurDirection, blurStep);\n"
+    "#elif BLUR_TYPE == BLUR_SCALE\n"
+    "    color = scaleBlur(uv0);\n"
+    "#else\n"
+    "    vec2 uv = uv0;\n"
+    "#if ANIMSEQ == 1\n"
+    "    uv.x = clamp(uv.x, 0., 1.);\n"
+    "    uv.y = clamp(uv.y, 0., 1.);\n"
+    "    uv = vec4(uv, 0.0, 1.0);\n"
+    "#endif\n"
+    "    color = texture2D(tex, uv);\n"
+    "#endif\n"
+    "    color *= alpha;\n"
+    "    gl_FragColor = color;\n"
+    "}\n"
+    ;
 
 #undef __FTERRORS_H__
 #define FT_ERROR_START_LIST {
@@ -867,7 +992,7 @@ static int config_props(AVFilterLink *inlink)
     glViewport(0, 0, inlink->w, inlink->h);
 
     int ret;
-    if ((ret = build_program(ctx, &gs->program, v_shader_source, f_shader_source)) < 0)
+    if ((ret = build_program(ctx, &gs->program, v_shader_source, f_shader_source_bad_typewriter)) < 0)
     {
         av_log(NULL, AV_LOG_ERROR, "failed to build ogl program: %d\n", ret);
         return ret;
@@ -1110,6 +1235,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     const float time = in->pts * av_q2d(inlink->time_base);
     glUniform1f(gs->time, time);
+    
+    glUniform1f(glGetUniformLocation(gs->program, "deg"), time / 5.0);
     
     draw_text(ctx, in, inlink->w, inlink->h, time);
 
