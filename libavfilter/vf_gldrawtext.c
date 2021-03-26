@@ -54,7 +54,7 @@ static const EGLint configAttribs[] = {
     EGL_RED_SIZE,   8,
     EGL_GREEN_SIZE, 8,
     EGL_BLUE_SIZE,  8,
-    EGL_ALPHA_SIZE, 8,// if you need the alpha channel
+    //EGL_ALPHA_SIZE, 8,// if you need the alpha channel
     EGL_DEPTH_SIZE, 8,// if you need the depth buffer
     EGL_STENCIL_SIZE,8,
     EGL_NONE
@@ -65,7 +65,6 @@ static const EGLint configAttribs[] = {
     EGL_BLUE_SIZE, 8,
     EGL_GREEN_SIZE, 8,
     EGL_RED_SIZE, 8,
-    EGL_ALPHA_SIZE, 8,// if you need the alpha channel
     EGL_DEPTH_SIZE, 8,
     EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
     EGL_NONE};
@@ -181,7 +180,7 @@ typedef struct Glyph {
     int bitmap_top;
 } Glyph;
 
-#define PIXEL_FORMAT GL_RGBA
+#define PIXEL_FORMAT GL_RGB
 
 typedef struct
 {
@@ -619,7 +618,7 @@ static void tex_setup(AVFilterLink *inlink)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
 
     glUniform1i(glGetUniformLocation(gs->program, "tex"), 0);
 }
@@ -1121,7 +1120,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     glUniform2f(glGetUniformLocation(gs->program, "eraseUV"), v, 0.0f);
 
     // render it!!!
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
@@ -1176,7 +1175,7 @@ static av_cold void uninit(AVFilterContext *ctx)
 
 static int query_formats(AVFilterContext *ctx)
 {
-    static const enum AVPixelFormat formats[] = {AV_PIX_FMT_RGB32, AV_PIX_FMT_NONE};
+    static const enum AVPixelFormat formats[] = {AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE};
     return ff_set_common_formats(ctx, ff_make_format_list(formats));
 }
 
