@@ -4554,7 +4554,7 @@ static int transcode_step(void)
     OutputStream *ost;
     InputStream  *ist = NULL;
     int ret;
-
+    
     ost = choose_output();
     if (!ost) {
         if (got_eagain()) {
@@ -4670,6 +4670,12 @@ static int transcode(void)
 
         /* dump report by using the output first video and audio streams */
         print_report(0, timer_start, cur_time);
+        
+        if (nb_output_files) {
+            OutputFile *of = output_files[0];
+            if (of->speed > 0)
+                av_usleep(of->speed * 2000);
+        }
     }
 #if HAVE_THREADS
     free_input_threads();

@@ -2149,6 +2149,7 @@ static int open_output_file(OptionsContext *o, const char *filename)
         exit_program(1);
     output_files[nb_output_files - 1] = of;
 
+    of->speed          = o->speed;
     of->ost_index      = nb_output_streams;
     of->recording_time = o->recording_time;
     of->start_time     = o->start_time;
@@ -3771,6 +3772,9 @@ const OptionDef options[] = {
         "initialise hardware device", "args" },
     { "filter_hw_device", HAS_ARG | OPT_EXPERT, { .func_arg = opt_filter_hw_device },
         "set hardware device used when filtering", "device" },
+
+    { "speed",           HAS_ARG | OPT_INT  | OPT_OFFSET | OPT_OUTPUT,{ .off = OFFSET(speed) },
+        "transcode speed limit" },
 
     { NULL, },
 };

@@ -143,6 +143,7 @@ typedef struct OptionsContext {
     int metadata_chapters_manual;
     const char **attachments;
     int       nb_attachments;
+    int        speed;
 
     int chapters_input_file;
 
@@ -560,6 +561,7 @@ typedef struct OutputFile {
     uint64_t limit_filesize; /* filesize limit expressed in bytes */
 
     int shortest;
+    int speed;
 
     int header_written;
 } OutputFile;
