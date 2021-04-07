@@ -4678,7 +4678,7 @@ static int transcode(void)
                     OutputStream *ost = output_streams[0];
                     int64_t pts = av_rescale_q(ost->last_mux_dts, ost->mux_timebase, AV_TIME_BASE_Q);
                     int64_t now = av_gettime_relative() - timer_start;
-                    if (pts > of->speed * now) {
+                    if (pts > of->speed * now / 10) {
                         av_usleep(1000);
                         continue;
                     }

@@ -3774,7 +3774,8 @@ const OptionDef options[] = {
         "set hardware device used when filtering", "device" },
 
     { "speed",           HAS_ARG | OPT_INT  | OPT_OFFSET | OPT_OUTPUT,{ .off = OFFSET(speed) },
-        "transcode speed limit" },
+        "transcode speed limit, 0 means no limit, trans rate is limit to speed / 10. "
+        "e.g. speed = 10 means 1x, 25 means 2.5x" },
 
     { NULL, },
 };
