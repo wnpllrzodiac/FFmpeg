@@ -259,6 +259,7 @@ External library support:
   --enable-librav1e        enable AV1 encoding via rav1e [no]
   --enable-librsvg         enable SVG rasterization via librsvg [no]
   --enable-librubberband   enable rubberband needed for rubberband filter [no]
+  --enable-rnnoise         enable rnnoise needed for rnnoise filter [no]
   --enable-librtmp         enable RTMP[E] support via librtmp [no]
   --enable-libshine        enable fixed-point MP3 encoding via libshine [no]
   --enable-libsmbclient    enable Samba protocol via libsmbclient [no]
@@ -1721,6 +1722,7 @@ EXTERNAL_LIBRARY_GPL_LIST="
     libcdio
     libdavs2
     librubberband
+    rnnoise
     libvidstab
     libx264
     libx265
@@ -3577,6 +3579,7 @@ repeatfields_filter_deps="gpl"
 resample_filter_deps="avresample"
 roberts_opencl_filter_deps="opencl"
 rubberband_filter_deps="librubberband"
+rnnoise_filter_deps="rnnoise"
 sab_filter_deps="gpl swscale"
 scale2ref_filter_deps="swscale"
 scale_filter_deps="swscale"
@@ -6378,6 +6381,7 @@ enabled librav1e          && require_pkg_config librav1e "rav1e >= 0.1.0" rav1e.
 enabled librsvg           && require_pkg_config librsvg librsvg-2.0 librsvg-2.0/librsvg/rsvg.h rsvg_handle_render_cairo
 enabled librtmp           && require_pkg_config librtmp librtmp librtmp/rtmp.h RTMP_Socket
 enabled librubberband     && require_pkg_config librubberband "rubberband >= 1.8.1" rubberband/rubberband-c.h rubberband_new -lstdc++ && append librubberband_extralibs "-lstdc++"
+enabled rnnoise           && require_pkg_config rnnoise "rnnoise >= 1.0.0" rnnoise.h rnnoise_get_size -lm && append rnnoise_extralibs "-lm"
 enabled libshine          && require_pkg_config libshine shine shine/layer3.h shine_encode_buffer
 enabled libsmbclient      && { check_pkg_config libsmbclient smbclient libsmbclient.h smbc_init ||
                                require libsmbclient libsmbclient.h smbc_init -lsmbclient; }

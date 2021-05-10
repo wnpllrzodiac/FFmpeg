@@ -123,6 +123,7 @@ extern AVFilter ff_af_pan;
 extern AVFilter ff_af_replaygain;
 extern AVFilter ff_af_resample;
 extern AVFilter ff_af_rubberband;
+extern AVFilter ff_af_rnnoise;
 extern AVFilter ff_af_sidechaincompress;
 extern AVFilter ff_af_sidechaingate;
 extern AVFilter ff_af_silencedetect;
