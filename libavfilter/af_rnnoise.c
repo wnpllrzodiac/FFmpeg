@@ -60,9 +60,9 @@ static av_cold void uninit(AVFilterContext *ctx)
     RnnoiseContext *s = ctx->priv;
 
     for (int i=0;i<2;i++) {
-        if (!s->sts[i])
+        if (s->sts[i])
             rnnoise_destroy(s->sts[i]);
-        if (!s->process_buf[i])
+        if (s->process_buf[i])
             av_free(s->process_buf[i]);
     }
 }
@@ -109,7 +109,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     if (s->first_pts == AV_NOPTS_VALUE)
         s->first_pts = in->pts;
 
-    nb_samples = (s->buf_offset[0] / 2 + in->nb_samples) % FRAME_SIZE;
+    nb_samples = (s->buf_offset[0] / 2 + in->nb_samples) / FRAME_SIZE * FRAME_SIZE;
     out = ff_get_audio_buffer(outlink, nb_samples);
 
     memset(&x, 0, sizeof(x));
@@ -138,7 +138,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     
     av_frame_free(&in);
     
-    return ret < 0 ? ret : nb_samples;
+    //return ret < 0 ? ret : nb_samples;
+    return ff_filter_frame(outlink, out);
 }
 
 static int config_input(AVFilterLink *inlink)
