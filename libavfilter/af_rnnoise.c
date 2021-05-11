@@ -30,6 +30,12 @@
 
 #define FRAME_SIZE 480
 
+// ffmpeg -y -i out_no.wav -af rnnoise del.wav
+
+// ffmpeg -i out_no.wav -f s16le -c:a pcm_s16le out_no.pcm
+// ../rnnoise/examples/rnnoise_demo out_no.pcm out_fix.pcm
+// ffmpeg -f s16le -i out_fix.pcm out_fix.wav
+
 typedef struct RnnoiseContext {
     const AVClass *class;
 
@@ -110,17 +116,25 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         s->first_pts = in->pts;
 
     nb_samples = (s->buf_offset[0] / 2 + in->nb_samples) / FRAME_SIZE * FRAME_SIZE;
-    out = ff_get_audio_buffer(outlink, nb_samples);
 
     memset(&x, 0, sizeof(x));
+
+    out = ff_get_audio_buffer(outlink, nb_samples);
+    if (!out) {
+        av_frame_free(&in);
+        return AVERROR(ENOMEM);
+    }
+
+    out->pts = in->pts;
+    out->nb_samples = nb_samples;
 
     for (int i=0;i<inlink->channels;i++) {
         int left = in->linesize[i];
         int in_offset = 0;
         int out_offset = 0;
-        while (left / 2 >= FRAME_SIZE) {
+        while ((s->buf_offset[i] + left) / 2 >= FRAME_SIZE) {
             int copy_size = FRAME_SIZE * 2 - s->buf_offset[i];
-            memcpy(s->process_buf[i], in->data[i] + in_offset, copy_size);
+            memcpy(s->process_buf[i] + s->buf_offset[i], in->data[i] + in_offset, copy_size);
             for (int k=0;k<FRAME_SIZE;k++)
                 x[k] = s->process_buf[i][k];
             rnnoise_process_frame(s->sts[i], x, x);
@@ -130,9 +144,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
             left -= copy_size;
             in_offset += copy_size;
             out_offset += FRAME_SIZE * 2;
+            if (s->buf_offset[i] != 0)
+                s->buf_offset[i] = 0;
         }
 
-        memcpy(s->process_buf[i], in->data[i] + in_offset, left);
+        if (left > 0)
+            memcpy(s->process_buf[i], in->data[i] + in_offset, left);
         s->buf_offset[i] = left;
     }
     
@@ -162,7 +179,6 @@ static int config_input(AVFilterLink *inlink)
     for (int i=0;i<inlink->channels;i++) {
         s->sts[i] = rnnoise_create(NULL);
         s->process_buf[i] = (uint16_t *)av_malloc(FRAME_SIZE * 2);
-        s->buf_offset[i] = 0;
     }
 
     s->nb_samples = FRAME_SIZE;
