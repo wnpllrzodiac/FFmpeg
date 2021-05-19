@@ -48,6 +48,7 @@ typedef struct RnnoiseContext {
     uint16_t *process_buf[2];
     int buf_offset[2];
     int tempo;
+    int first;
 } RnnoiseContext;
 
 #define OFFSET(x) offsetof(RnnoiseContext, x)
@@ -103,6 +104,8 @@ static int query_formats(AVFilterContext *ctx)
     return ff_set_common_samplerates(ctx, formats);
 }
 
+#define SAVE_PCM_FILE
+
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
@@ -117,7 +120,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     nb_samples = (s->buf_offset[0] / 2 + in->nb_samples) / FRAME_SIZE * FRAME_SIZE;
 
-    memset(&x, 0, sizeof(x));
+    memset(x, 0, sizeof(x));
 
     out = ff_get_audio_buffer(outlink, nb_samples);
     if (!out) {
@@ -128,28 +131,51 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     out->pts = in->pts;
     out->nb_samples = nb_samples;
 
+#ifdef SAVE_PCM_FILE
+    static FILE *pFile = NULL;
+    if (!pFile)
+        pFile = fopen("del.pcm", "wb");
+
+    static FILE *pCvtFile = NULL;
+    if (!pCvtFile)
+        pCvtFile = fopen("del2.pcm", "wb");
+
+#endif
+
     for (int i=0;i<inlink->channels;i++) {
-        int left = in->linesize[i];
+#ifdef SAVE_PCM_FILE
+        fwrite(in->data[i], 1, in->nb_samples * 2, pFile);
+#endif
+
+        int left = in->nb_samples * 2;
         int in_offset = 0;
         int out_offset = 0;
         while ((s->buf_offset[i] + left) / 2 >= FRAME_SIZE) {
             int copy_size = FRAME_SIZE * 2 - s->buf_offset[i];
-            memcpy(s->process_buf[i] + s->buf_offset[i], in->data[i] + in_offset, copy_size);
+            memcpy((uint8_t *)s->process_buf[i] + s->buf_offset[i], in->data[i] + in_offset, copy_size);
             for (int k=0;k<FRAME_SIZE;k++)
                 x[k] = s->process_buf[i][k];
             rnnoise_process_frame(s->sts[i], x, x);
             for (int k=0;k<FRAME_SIZE;k++)
                 s->process_buf[i][k] = x[k];
-            memcpy(out->data[i] + out_offset, s->process_buf[i], FRAME_SIZE * 2);
+            if (!s->first) {
+                memcpy(out->data[i] + out_offset, (uint8_t *)s->process_buf[i], FRAME_SIZE * 2);
+#ifdef SAVE_PCM_FILE
+                fwrite(s->process_buf[i], 1, FRAME_SIZE * 2, pCvtFile);
+#endif
+                out_offset += FRAME_SIZE * 2;
+            }
+
+            s->first = 0;
             left -= copy_size;
             in_offset += copy_size;
-            out_offset += FRAME_SIZE * 2;
             if (s->buf_offset[i] != 0)
                 s->buf_offset[i] = 0;
         }
 
-        if (left > 0)
+        if (left > 0) {
             memcpy(s->process_buf[i], in->data[i] + in_offset, left);
+        }
         s->buf_offset[i] = left;
     }
     
@@ -164,11 +190,7 @@ static int config_input(AVFilterLink *inlink)
     AVFilterContext *ctx = inlink->dst;
     RnnoiseContext *s = ctx->priv;
 
-    //if (s->rbs)
-    //    rubberband_delete(s->rbs);
-    //s->rbs = rubberband_new(inlink->sample_rate, inlink->channels, opts, 1. / s->tempo, s->pitch);
-    //if (!s->rbs)
-    //    return AVERROR(ENOMEM);
+    av_log(NULL, AV_LOG_ERROR, "config_input() channels: %d\n", inlink->channels);
 
     for (int i=0;i<2;i++) {
         s->sts[i] = NULL;
@@ -178,11 +200,13 @@ static int config_input(AVFilterLink *inlink)
 
     for (int i=0;i<inlink->channels;i++) {
         s->sts[i] = rnnoise_create(NULL);
-        s->process_buf[i] = (uint16_t *)av_malloc(FRAME_SIZE * 2);
+        s->process_buf[i] = (uint16_t *)av_mallocz(FRAME_SIZE * 2);
     }
 
     s->nb_samples = FRAME_SIZE;
     s->first_pts = AV_NOPTS_VALUE;
+    av_log(NULL, AV_LOG_ERROR, "set s->first 1\n");
+    s->first = 1;
 
     return 0;
 }
