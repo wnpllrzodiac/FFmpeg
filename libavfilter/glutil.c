@@ -40,6 +40,10 @@ int no_window_init(void)
     const char *displayName = NULL;
     Display *display;
     display = XOpenDisplay(displayName);
+    if (!display) {
+        av_log(NULL, AV_LOG_ERROR, "failed to open x display\n");
+        return -1;
+    }
 
     static int visualAttribs[] = {
         GLX_SAMPLE_BUFFERS, 1, GLX_SAMPLES, 4

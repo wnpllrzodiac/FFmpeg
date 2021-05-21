@@ -144,6 +144,7 @@ typedef struct
     GLuint pos_buf;
 
     int no_window;
+    int print_shader_src;
 
     GLchar *f_shader_source;
 
@@ -165,7 +166,8 @@ static const AVOption gltransition_options[] = {
     {"duration", "transition duration in seconds", OFFSET(duration), AV_OPT_TYPE_DOUBLE, {.dbl = 1.0}, 0, DBL_MAX, FLAGS},
     {"offset", "delay before startingtransition in seconds", OFFSET(offset), AV_OPT_TYPE_DOUBLE, {.dbl = 0.0}, 0, DBL_MAX, FLAGS},
     {"source", "path to the gl-transition source file (defaults to basic fade)", OFFSET(source), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, CHAR_MAX, FLAGS},
-    { "uniforms", "uniform vars setting, e.g. uniforms='some_var=1.0&other_var=1'", OFFSET(uniforms), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
+    {"uniforms", "uniform vars setting, e.g. uniforms='some_var=1.0&other_var=1'", OFFSET(uniforms), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
+    {"printshadercode", "whether to print shader code to debug", OFFSET(print_shader_src), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {NULL}};
 
 FRAMESYNC_DEFINE_CLASS(gltransition, GlTransitionContext, fs);
@@ -284,7 +286,7 @@ static int build_program(AVFilterContext *ctx)
     }
 
     snprintf(gs->f_shader_source, len * sizeof(*gs->f_shader_source), f_shader_template, transition_source);
-    av_log(ctx, AV_LOG_ERROR, "\n%s\n", gs->f_shader_source);
+    av_log(ctx, gs->print_shader_src ? AV_LOG_ERROR : AV_LOG_INFO, "shader source:\n%s\n%s\n", gs->source, gs->f_shader_source);
 
     if (source) {
         free(source);
@@ -452,12 +454,18 @@ static void setup_uniforms(AVFilterLink *fromLink)
                         switch (vecShape) {
                         case 2:
                             glUniform2f(location, floatVec[0], floatVec[1]);
+                            av_log(ctx, AV_LOG_INFO, "glUniform2f(%s, %.3f %.3f)\n", 
+                                sa.strings[i], floatVec[0], floatVec[1]);
                             break;
                         case 3:
                             glUniform3f(location, floatVec[0], floatVec[1], floatVec[2]);
+                            av_log(ctx, AV_LOG_INFO, "glUniform3f(%s, %.3f %.3f %.3f)\n", 
+                                sa.strings[i], floatVec[0], floatVec[1], floatVec[2]);
                             break;
                         case 4:
                             glUniform4f(location, floatVec[0], floatVec[1], floatVec[2], floatVec[3]);
+                            av_log(ctx, AV_LOG_INFO, "glUniform4f(%s, %.3f %.3f %.3f %.3f)\n", 
+                                sa.strings[i], floatVec[0], floatVec[1], floatVec[2], floatVec[3]);
                             break;
                         default:
                             break;
@@ -466,19 +474,26 @@ static void setup_uniforms(AVFilterLink *fromLink)
                         switch (vecShape) {
                         case 2:
                             glUniform2i(location, intVec[0], intVec[1]);
+                            av_log(ctx, AV_LOG_INFO, "glUniform2i(%s, %d %d)\n", sa.strings[i], intVec[0], intVec[1]);
                             break;
                         case 3:
                             glUniform3i(location, intVec[0], intVec[1], intVec[2]);
+                            av_log(ctx, AV_LOG_INFO, "glUniform3i(%s, %d %d %d)\n", sa.strings[i], intVec[0], intVec[1], intVec[2]);
                             break;
                         case 4:
                             glUniform4i(location, intVec[0], intVec[1], intVec[2], intVec[3]);
+                            av_log(ctx, AV_LOG_INFO, "glUniform4i(%s, %d %d %d %d)\n", 
+                                sa.strings[i], intVec[0], intVec[1], intVec[2], intVec[3]);
                         default:
                             break;
                         }
                     } else if (strToInt(sa.strings[i + 1], &intVar)) {
                         glUniform1i(location, intVar);
+                        av_log(ctx, AV_LOG_INFO, "glUniform1i(%s, %d)\n", sa.strings[i], intVar);
                     } else if (strToFloat(sa.strings[i + 1], &floatVar)) {
                         glUniform1f(location, floatVar);
+                        av_log(ctx, AV_LOG_INFO, "glUniform1f(%s, %.3f)\n", sa.strings[i], floatVar);
+
                     } else {
                         av_log(ctx, AV_LOG_ERROR, "value %s not supported, supported: int float ivec vec)", sa.strings[i + 1]);
                     }

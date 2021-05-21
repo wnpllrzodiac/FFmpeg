@@ -224,6 +224,7 @@ static int config_props(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
     GlMirrorContext *gs = ctx->priv;
+    int ret;
 
 #ifdef GL_TRANSITION_USING_EGL
     //init EGL
@@ -266,8 +267,9 @@ static int config_props(AVFilterLink *inlink)
         EGL_NONE,
     };
     //3.1 根据所需的参数获取符合该参数的config_size，主要是解决有些手机eglChooseConfig失败的兼容性问题
-    if (!eglChooseConfig(gs->eglDpy, configAttribs, &gs->eglCfg, 1, &numConfigs)) {
-        av_log(NULL, AV_LOG_ERROR, "eglChooseConfig error\n");
+    ret = eglChooseConfig(gs->eglDpy, configAttribs, &gs->eglCfg, 1, &numConfigs);
+    if (!ret) {
+        av_log(NULL, AV_LOG_ERROR, "eglChooseConfig error: %d\n", ret);
         return -1;
     }
 #ifdef __ANDROID__
@@ -340,7 +342,6 @@ static int config_props(AVFilterLink *inlink)
 
     glViewport(0, 0, inlink->w, inlink->h);
 
-    int ret;
     if ((ret = build_program(ctx)) < 0)
     {
         av_log(NULL, AV_LOG_ERROR, "failed to build ogl program: %d\n", ret);
