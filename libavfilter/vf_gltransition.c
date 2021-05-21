@@ -2,10 +2,13 @@
 #include "internal.h"
 #include "framesync.h"
 #include "glutil.h"
+#include "FreeImage.h"
 
 #include <string.h>
 
 // refer to https://github.com/transitive-bullshit/ffmpeg-gl-transition
+// https://github.com/transitive-bullshit/ffmpeg-gl-transition/pull/60/files
+// https://github.com/numberwolf/FFmpeg-Plus-OpenGL
 // example:
 // ./ffmpeg_g -ss 60 -i ~/work/media/astroboy.mp4 -i ~/work/media/TimeCode.mov 
 //   -filter_complex "[0:v]scale=640:480[v0];[1:v]scale=640:480[v1];
@@ -116,7 +119,7 @@ static const GLchar *f_default_transition_source =
     "  );\n"
     "}\n";
 
-#define PIXEL_FORMAT GL_RGB
+//#define PIXEL_FORMAT GL_RGB
 
 typedef struct
 {
@@ -129,12 +132,21 @@ typedef struct
     char *source;
     char *uniforms;
 
+    char *extra_texture_filepath;
+    uint8_t *tex_data;
+    int alpha;
+
+    // decided by alpha
+    int pix_fmt;
+    int channel_num;
+
     // timestamp of the first frame in the output, in the timebase units
     int64_t first_pts;
 
     // uniforms
     GLuint from;
     GLuint to;
+    GLuint extra_tex;
     GLint progress;
     GLint ratio;
     GLint _fromR;
@@ -167,6 +179,8 @@ static const AVOption gltransition_options[] = {
     {"offset", "delay before startingtransition in seconds", OFFSET(offset), AV_OPT_TYPE_DOUBLE, {.dbl = 0.0}, 0, DBL_MAX, FLAGS},
     {"source", "path to the gl-transition source file (defaults to basic fade)", OFFSET(source), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, CHAR_MAX, FLAGS},
     {"uniforms", "uniform vars setting, e.g. uniforms='some_var=1.0&other_var=1'", OFFSET(uniforms), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
+    {"extra_texture_filepath", "path to the gl-transition extra_texture file", OFFSET(extra_texture_filepath), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
+    {"alpha", "keep alpha channel", OFFSET(alpha), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, FLAGS},
     {"printshadercode", "whether to print shader code to debug", OFFSET(print_shader_src), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {NULL}};
 
@@ -225,7 +239,7 @@ static void tex_setup(AVFilterLink *inlink)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+        glTexImage2D(GL_TEXTURE_2D, 0, gs->pix_fmt, inlink->w, inlink->h, 0, gs->pix_fmt, GL_UNSIGNED_BYTE, NULL);
 
         glUniform1i(glGetUniformLocation(gs->program, "from"), 0);
     }
@@ -240,9 +254,57 @@ static void tex_setup(AVFilterLink *inlink)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
+        glTexImage2D(GL_TEXTURE_2D, 0, gs->pix_fmt, inlink->w, inlink->h, 0, gs->pix_fmt, GL_UNSIGNED_BYTE, NULL);
 
         glUniform1i(glGetUniformLocation(gs->program, "to"), 1);
+    }
+
+    { // extra texture
+        if (gs->extra_texture_filepath) { // extra_texture
+            int width, height, channels;
+
+            FIBITMAP *img = FreeImage_Load(FIF_PNG, gs->extra_texture_filepath, 0);
+            if (!img) {
+                av_log(NULL, AV_LOG_ERROR, "failed to open image file: %s\n", gs->extra_texture_filepath);
+                return -1;
+            }
+
+            width = FreeImage_GetWidth(img);
+            height = FreeImage_GetHeight(img);
+            int bpp = FreeImage_GetBPP(img);
+            channels = bpp / 8;
+            //av_log(NULL, AV_LOG_DEBUG, "img res: %d x %d, bpp %d\n", w, h, bpp);
+            if (width <= 0 || height <= 0 || bpp <= 0) {
+                av_log(NULL, AV_LOG_ERROR, "failed to get image file info: %s\n", gs->extra_texture_filepath);
+                return -1;
+            }
+
+            if (!gs->tex_data)
+                gs->tex_data = av_mallocz(width * height * channels);
+
+            BYTE *data = FreeImage_GetBits(img);
+            if (!data) {
+                av_log(NULL, AV_LOG_ERROR, "failed to get image data: %s\n", gs->extra_texture_filepath);
+                return -1;
+            }
+
+            memcpy(gs->tex_data, data, width * height * channels);
+
+            glGenTextures(1, &gs->extra_tex);
+            glActiveTexture(GL_TEXTURE0 + 2);
+            glBindTexture(GL_TEXTURE_2D, gs->extra_tex);
+
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+            glTexImage2D(GL_TEXTURE_2D, 0, gs->pix_fmt, width, height, 0, gs->pix_fmt, GL_UNSIGNED_BYTE, gs->tex_data);
+
+            glUniform1i(glGetUniformLocation(gs->program, "extra_tex"), 2);
+
+            FreeImage_Unload(img);
+        }
     }
 }
 
@@ -286,7 +348,7 @@ static int build_program(AVFilterContext *ctx)
     }
 
     snprintf(gs->f_shader_source, len * sizeof(*gs->f_shader_source), f_shader_template, transition_source);
-    av_log(ctx, gs->print_shader_src ? AV_LOG_ERROR : AV_LOG_INFO, "shader source:\n%s\n%s\n", gs->source, gs->f_shader_source);
+    av_log(ctx, gs->print_shader_src ? AV_LOG_INFO : AV_LOG_DEBUG, "shader source:\n%s\n%s\n", gs->source, gs->f_shader_source);
 
     if (source) {
         free(source);
@@ -345,17 +407,17 @@ static AVFrame *apply_transition(FFFrameSync *fs,
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, c->from);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, fromFrame->linesize[0] / 3);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, fromLink->w, fromLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, fromFrame->data[0]);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, fromFrame->linesize[0] / c->channel_num);
+    glTexImage2D(GL_TEXTURE_2D, 0, c->pix_fmt, fromLink->w, fromLink->h, 0, c->pix_fmt, GL_UNSIGNED_BYTE, fromFrame->data[0]);
 
     glActiveTexture(GL_TEXTURE0 + 1);
     glBindTexture(GL_TEXTURE_2D, c->to);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, toFrame->linesize[0] / 3);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, toLink->w, toLink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, toFrame->data[0]);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, toFrame->linesize[0] / c->channel_num);
+    glTexImage2D(GL_TEXTURE_2D, 0, c->pix_fmt, toLink->w, toLink->h, 0, c->pix_fmt, GL_UNSIGNED_BYTE, toFrame->data[0]);
 
     glDrawArrays(GL_TRIANGLES, 0, 6);
-    glPixelStorei(GL_PACK_ROW_LENGTH, outFrame->linesize[0] / 3);
-    glReadPixels(0, 0, outLink->w, outLink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)outFrame->data[0]);
+    glPixelStorei(GL_PACK_ROW_LENGTH, outFrame->linesize[0] / c->channel_num);
+    glReadPixels(0, 0, outLink->w, outLink->h, c->pix_fmt, GL_UNSIGNED_BYTE, (GLvoid *)outFrame->data[0]);
 
     glPixelStorei(GL_PACK_ROW_LENGTH, 0);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
@@ -454,17 +516,17 @@ static void setup_uniforms(AVFilterLink *fromLink)
                         switch (vecShape) {
                         case 2:
                             glUniform2f(location, floatVec[0], floatVec[1]);
-                            av_log(ctx, AV_LOG_INFO, "glUniform2f(%s, %.3f %.3f)\n", 
+                            av_log(ctx, AV_LOG_INFO, "glUniform2f(%s, %.3f, %.3f)\n", 
                                 sa.strings[i], floatVec[0], floatVec[1]);
                             break;
                         case 3:
                             glUniform3f(location, floatVec[0], floatVec[1], floatVec[2]);
-                            av_log(ctx, AV_LOG_INFO, "glUniform3f(%s, %.3f %.3f %.3f)\n", 
+                            av_log(ctx, AV_LOG_INFO, "glUniform3f(%s, %.3f, %.3f, %.3f)\n", 
                                 sa.strings[i], floatVec[0], floatVec[1], floatVec[2]);
                             break;
                         case 4:
                             glUniform4f(location, floatVec[0], floatVec[1], floatVec[2], floatVec[3]);
-                            av_log(ctx, AV_LOG_INFO, "glUniform4f(%s, %.3f %.3f %.3f %.3f)\n", 
+                            av_log(ctx, AV_LOG_INFO, "glUniform4f(%s, %.3f, %.3f, %.3f, %.3f)\n", 
                                 sa.strings[i], floatVec[0], floatVec[1], floatVec[2], floatVec[3]);
                             break;
                         default:
@@ -474,15 +536,15 @@ static void setup_uniforms(AVFilterLink *fromLink)
                         switch (vecShape) {
                         case 2:
                             glUniform2i(location, intVec[0], intVec[1]);
-                            av_log(ctx, AV_LOG_INFO, "glUniform2i(%s, %d %d)\n", sa.strings[i], intVec[0], intVec[1]);
+                            av_log(ctx, AV_LOG_INFO, "glUniform2i(%s, %d, %d)\n", sa.strings[i], intVec[0], intVec[1]);
                             break;
                         case 3:
                             glUniform3i(location, intVec[0], intVec[1], intVec[2]);
-                            av_log(ctx, AV_LOG_INFO, "glUniform3i(%s, %d %d %d)\n", sa.strings[i], intVec[0], intVec[1], intVec[2]);
+                            av_log(ctx, AV_LOG_INFO, "glUniform3i(%s, %d, %d, %d)\n", sa.strings[i], intVec[0], intVec[1], intVec[2]);
                             break;
                         case 4:
                             glUniform4i(location, intVec[0], intVec[1], intVec[2], intVec[3]);
-                            av_log(ctx, AV_LOG_INFO, "glUniform4i(%s, %d %d %d %d)\n", 
+                            av_log(ctx, AV_LOG_INFO, "glUniform4i(%s, %d, %d, %d, %d)\n", 
                                 sa.strings[i], intVec[0], intVec[1], intVec[2], intVec[3]);
                         default:
                             break;
@@ -645,28 +707,6 @@ static int config_props(AVFilterLink *inlink)
     return 0;
 }
 
-static int filter_frame(AVFilterLink *inlink, AVFrame *in)
-{
-    AVFilterContext *ctx = inlink->dst;
-    AVFilterLink *outlink = ctx->outputs[0];
-    GlTransitionContext *gs = ctx->priv;
-
-    AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
-    if (!out)
-    {
-        av_frame_free(&in);
-        return AVERROR(ENOMEM);
-    }
-    av_frame_copy_props(out, in);
-
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
-
-    av_frame_free(&in);
-    return ff_filter_frame(outlink, out);
-}
-
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlTransitionContext *gs = ctx->priv;
@@ -676,6 +716,8 @@ static av_cold void uninit(AVFilterContext *ctx)
     if (gs->eglDpy) {
         glDeleteTextures(1, &gs->from);
         glDeleteTextures(1, &gs->to);
+        if (gs->extra_texture_filepath)
+            glDeleteTextures(1, &gs->extra_tex);
         glDeleteProgram(gs->program);
         glDeleteBuffers(1, &gs->pos_buf);
         eglTerminate(gs->eglDpy);
@@ -684,6 +726,8 @@ static av_cold void uninit(AVFilterContext *ctx)
     if (gs->window) {
         glDeleteTextures(1, &gs->from);
         glDeleteTextures(1, &gs->to);
+        if (gs->extra_texture_filepath)
+            glDeleteTextures(1, &gs->extra_tex);
         glDeleteProgram(gs->program);
         glDeleteBuffers(1, &gs->pos_buf);
         glfwDestroyWindow(gs->window);
@@ -693,8 +737,36 @@ static av_cold void uninit(AVFilterContext *ctx)
 
 static int query_formats(AVFilterContext *ctx)
 {
-    static const enum AVPixelFormat formats[] = {AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE};
-    return ff_set_common_formats(ctx, ff_make_format_list(formats));
+    //static const enum AVPixelFormat formats[] = {AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE};
+    //return ff_set_common_formats(ctx, ff_make_format_list(formats));
+
+    GlTransitionContext *c = ctx->priv;
+    static const enum AVPixelFormat pix_fmts_rgb[] = {
+        AV_PIX_FMT_RGB24,    AV_PIX_FMT_BGR24,
+        AV_PIX_FMT_ARGB,     AV_PIX_FMT_ABGR,
+        AV_PIX_FMT_RGBA,     AV_PIX_FMT_BGRA,
+        AV_PIX_FMT_NONE
+    };
+    static const enum AVPixelFormat pix_fmts_rgba[] = {
+        AV_PIX_FMT_ARGB,     AV_PIX_FMT_ABGR,
+        AV_PIX_FMT_RGBA,     AV_PIX_FMT_BGRA,
+        AV_PIX_FMT_NONE
+    };
+    AVFilterFormats *fmts_list;
+
+    if (c->alpha) {
+        c->pix_fmt = GL_RGBA;
+        c->channel_num = 4;
+        fmts_list = ff_make_format_list(pix_fmts_rgba);
+    } else {
+        c->pix_fmt = GL_RGB;
+        c->channel_num = 3;
+        fmts_list = ff_make_format_list(pix_fmts_rgb);
+    }
+    if (!fmts_list) {
+      return AVERROR(ENOMEM);
+    }
+    return ff_set_common_formats(ctx, fmts_list);
 }
 
 static int activate(AVFilterContext *ctx)
