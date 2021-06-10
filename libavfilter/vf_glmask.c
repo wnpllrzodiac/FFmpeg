@@ -73,7 +73,9 @@ static const GLchar *v_shader_source =
     "}\n";
 
 static const GLchar *f_shader_source =
+#ifndef __ANDROID__
     "#version 130\n"
+#endif
     "precision highp float;\n"
     "\n"
     "varying vec2 texCoord;\n"
