@@ -640,7 +640,7 @@ static int tex_setup(AVFilterLink *inlink)
             gs->mask_channels = 3;
             gs->mask_pix_fmt = GL_RGB;
             break;
-        case AV_PIX_FMT_RGB32:
+        case AV_PIX_FMT_RGBA:
             gs->mask_channels = 4;
             gs->mask_pix_fmt = GL_RGBA;
             break;
@@ -649,6 +649,8 @@ static int tex_setup(AVFilterLink *inlink)
             gs->mask_pix_fmt = GL_RED;
             break;
         default:
+            av_log(ctx, AV_LOG_ERROR, "unsupported pix format: %d(%s)\n", 
+                tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
             return AVERROR(EINVAL);
         }
         // linesize[0] > width * channels, e.g. 2016 vs 500 * 4

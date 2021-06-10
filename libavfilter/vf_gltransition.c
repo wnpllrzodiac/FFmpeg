@@ -340,7 +340,7 @@ static int tex_setup(AVFilterLink *inlink)
                 channels = 3;
                 pix_fmt = GL_RGB;
                 break;
-            case AV_PIX_FMT_RGB32:
+            case AV_PIX_FMT_RGBA:
                 channels = 4;
                 pix_fmt = GL_RGBA;
                 break;
@@ -349,6 +349,8 @@ static int tex_setup(AVFilterLink *inlink)
                 pix_fmt = GL_RED;
                 break;
             default:
+                av_log(ctx, AV_LOG_ERROR, "unsupported pix format: %d(%s)\n", 
+                    tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
                 return AVERROR(EINVAL);
             }
             int frame_data_size = width * height * channels;
