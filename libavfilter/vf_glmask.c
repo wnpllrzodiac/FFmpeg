@@ -625,11 +625,27 @@ static int tex_setup(AVFilterLink *inlink)
 
         int width = tex_frame->width;
         int height = tex_frame->height;
-        int frame_data_size = tex_frame->linesize[0] * tex_frame->height;
+        int channels = (tex_frame->format == AV_PIX_FMT_RGB24 ? 3 : 4);
+        // linesize[0] > width * channels, e.g. 2016 vs 500 * 4
+        int frame_data_size = width * height * channels;
         if (!gs->mask_data)
-            gs->mask_data = av_mallocz(tex_frame->linesize[0] * tex_frame->height * gs->mask_pic_num);
+            gs->mask_data = av_mallocz(frame_data_size * gs->mask_pic_num);
         
-        memcpy(gs->mask_data + frame_data_size * i, tex_frame->data[0], tex_frame->linesize[0] * tex_frame->height);
+        if (tex_frame->linesize[0] == width * channels) {
+            // bunch copy
+            memcpy(gs->mask_data + frame_data_size * i, tex_frame->data[0], tex_frame->linesize[0] * height);
+        }
+        else {
+            // line copy
+            int data_offset = 0;
+            int frame_offset = 0;
+            for (int line=0;line<height;line++) { 
+                memcpy(gs->mask_data + frame_data_size * i + data_offset, tex_frame->data[0] + frame_offset, width * channels);
+                data_offset += width * channels;
+                frame_offset += tex_frame->linesize[0];
+            }
+        }
+        
         av_frame_free(&tex_frame);
 #endif
     }

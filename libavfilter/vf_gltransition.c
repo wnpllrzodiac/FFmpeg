@@ -318,10 +318,26 @@ static int tex_setup(AVFilterLink *inlink)
 
             int width = tex_frame->width;
             int height = tex_frame->height;
+            int channels = (tex_frame->format == AV_PIX_FMT_RGB24 ? 3 : 4);
+            int frame_data_size = width * height * channels;
             if (!gs->tex_data)
-                gs->tex_data = av_mallocz(tex_frame->linesize[0] * tex_frame->height);
+                gs->tex_data = av_mallocz(frame_data_size);
             
-            memcpy(gs->tex_data, tex_frame->data[0], tex_frame->linesize[0] * tex_frame->height);
+            if (tex_frame->linesize[0] == width * channels) {
+                // bunch copy
+                memcpy(gs->tex_data, tex_frame->data[0], tex_frame->linesize[0] * height);
+            }
+            else {
+                // line copy
+                int data_offset = 0;
+                int frame_offset = 0;
+                for (int line=0;line<height;line++) { 
+                    memcpy(gs->tex_data, tex_frame->data[0] + frame_offset, width * channels);
+                    data_offset += width * channels;
+                    frame_offset += tex_frame->linesize[0];
+                }
+            }
+
             av_frame_free(&tex_frame);
 #endif
             glGenTextures(1, &gs->extra_tex);
