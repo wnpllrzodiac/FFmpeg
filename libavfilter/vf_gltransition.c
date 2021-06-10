@@ -265,8 +265,10 @@ static int tex_setup(AVFilterLink *inlink)
 
     { // extra texture
         if (gs->extra_texture_filepath) { // extra_texture
+            int channels;
+            int pix_fmt;
 #ifdef USE_FREEIMAGE
-            int width, height, channels;
+            int width, height;
 
             FIBITMAP *img = FreeImage_Load(FIF_PNG, gs->extra_texture_filepath, 0);
             if (!img) {
@@ -278,6 +280,20 @@ static int tex_setup(AVFilterLink *inlink)
             height = FreeImage_GetHeight(img);
             int bpp = FreeImage_GetBPP(img);
             channels = bpp / 8;
+            switch (channels) {
+            case 3:
+                pix_fmt = GL_RGB;
+                break;
+            case 4:
+                pix_fmt = GL_RGBA;
+                break;
+            case 1:
+                pix_fmt = GL_RED;
+                break;
+            default:
+                return AVERROR(EINVAL);
+            }
+
             //av_log(NULL, AV_LOG_DEBUG, "img res: %d x %d, bpp %d\n", w, h, bpp);
             if (width <= 0 || height <= 0 || bpp <= 0) {
                 av_log(NULL, AV_LOG_ERROR, "failed to get image file info: %s\n", gs->extra_texture_filepath);
@@ -310,7 +326,8 @@ static int tex_setup(AVFilterLink *inlink)
             }
                 
 
-            if (tex_frame->format != AV_PIX_FMT_RGB24 && tex_frame->format != AV_PIX_FMT_RGBA) {
+            if (tex_frame->format != AV_PIX_FMT_RGB24 && tex_frame->format != AV_PIX_FMT_RGBA && 
+                tex_frame->format != AV_PIX_FMT_GRAY8) {
                 av_log(ctx, AV_LOG_ERROR, "texture image is not a rgb image: %d(%s)\n", 
                     tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
                 return AVERROR(EINVAL);
@@ -318,7 +335,22 @@ static int tex_setup(AVFilterLink *inlink)
 
             int width = tex_frame->width;
             int height = tex_frame->height;
-            int channels = (tex_frame->format == AV_PIX_FMT_RGB24 ? 3 : 4);
+            switch (tex_frame->format) {
+            case AV_PIX_FMT_RGB24:
+                channels = 3;
+                pix_fmt = GL_RGB;
+                break;
+            case AV_PIX_FMT_RGB32:
+                channels = 4;
+                pix_fmt = GL_RGBA;
+                break;
+            case AV_PIX_FMT_GRAY8:
+                channels = 1;
+                pix_fmt = GL_RED;
+                break;
+            default:
+                return AVERROR(EINVAL);
+            }
             int frame_data_size = width * height * channels;
             if (!gs->tex_data)
                 gs->tex_data = av_mallocz(frame_data_size);
@@ -349,7 +381,7 @@ static int tex_setup(AVFilterLink *inlink)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
-            glTexImage2D(GL_TEXTURE_2D, 0, gs->pix_fmt, width, height, 0, gs->pix_fmt, GL_UNSIGNED_BYTE, gs->tex_data);
+            glTexImage2D(GL_TEXTURE_2D, 0, pix_fmt, width, height, 0, pix_fmt, GL_UNSIGNED_BYTE, gs->tex_data);
 
             glUniform1i(glGetUniformLocation(gs->program, "extra_tex"), 2);
         }

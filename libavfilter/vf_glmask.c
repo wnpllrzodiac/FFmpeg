@@ -475,6 +475,10 @@ static const GLchar *f_shader_source =
     uint8_t *mask_data;
     int mask_pic_num;
     char *mask_pic_fmt;
+    int mask_width;
+    int mask_height;
+    int mask_channels;
+    int mask_pix_fmt;
 
 #ifdef GL_TRANSITION_USING_EGL
     EGLDisplay      eglDpy;
@@ -555,19 +559,6 @@ static int tex_setup(AVFilterLink *inlink)
     glUniform1i(glGetUniformLocation(gs->program, "tex"), 0);
 
     // mask
-    glGenTextures(1, &gs->mask_tex);
-    glActiveTexture(GL_TEXTURE0 + 1);
-
-    glBindTexture(GL_TEXTURE_2D, gs->mask_tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 500/*w*/, 500/*h*/, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-
-    glUniform1i(glGetUniformLocation(gs->program, "mask_tex"), 1);
-
     if (gs->mask_pic_fmt == NULL || gs->mask_pic_num == 0 || gs->mask_pic_num > 256) {
         av_log(NULL, AV_LOG_ERROR, "invalid mask pic settings\n");
         return -1;
@@ -586,6 +577,24 @@ static int tex_setup(AVFilterLink *inlink)
         int w = FreeImage_GetWidth(img);
         int h = FreeImage_GetHeight(img);
         int bpp = FreeImage_GetBPP(img);
+
+        gs->mask_width = w;
+        gs->mask_height = h;
+        gs->mask_channels = bpp / 8;
+        switch (gs->mask_channels) {
+        case 3:
+            gs->mask_pix_fmt = GL_RGB;
+            break;
+        case 4:
+            gs->mask_pix_fmt = GL_RGBA;
+            break;
+        case 1:
+            gs->mask_pix_fmt = GL_RED;
+            break;
+        default:
+            return AVERROR(EINVAL);
+        }
+
         //av_log(NULL, AV_LOG_DEBUG, "img res: %d x %d, bpp %d\n", w, h, bpp);
         if (w <= 0 || h <= 0 || bpp <= 0) {
             av_log(NULL, AV_LOG_ERROR, "failed to get image file info: %s\n", filename);
@@ -617,31 +626,49 @@ static int tex_setup(AVFilterLink *inlink)
             return ret;
         } 
 
-        if (tex_frame->format != AV_PIX_FMT_RGB24 && tex_frame->format != AV_PIX_FMT_RGBA) {
+        if (tex_frame->format != AV_PIX_FMT_RGB24 && tex_frame->format != AV_PIX_FMT_RGBA && 
+                tex_frame->format != AV_PIX_FMT_GRAY8) {
             av_log(ctx, AV_LOG_ERROR, "texture image is not a rgb image: %d(%s)\n", 
                 tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
             return AVERROR(EINVAL);
         }
 
-        int width = tex_frame->width;
-        int height = tex_frame->height;
-        int channels = (tex_frame->format == AV_PIX_FMT_RGB24 ? 3 : 4);
+        gs->mask_width = tex_frame->width;
+        gs->mask_height = tex_frame->height;
+        switch (tex_frame->format) {
+        case AV_PIX_FMT_RGB24:
+            gs->mask_channels = 3;
+            gs->mask_pix_fmt = GL_RGB;
+            break;
+        case AV_PIX_FMT_RGB32:
+            gs->mask_channels = 4;
+            gs->mask_pix_fmt = GL_RGBA;
+            break;
+        case AV_PIX_FMT_GRAY8:
+            gs->mask_channels = 1;
+            gs->mask_pix_fmt = GL_RED;
+            break;
+        default:
+            return AVERROR(EINVAL);
+        }
         // linesize[0] > width * channels, e.g. 2016 vs 500 * 4
-        int frame_data_size = width * height * channels;
+        int frame_data_size = tex_frame->width * tex_frame->height * gs->mask_channels;
         if (!gs->mask_data)
             gs->mask_data = av_mallocz(frame_data_size * gs->mask_pic_num);
         
-        if (tex_frame->linesize[0] == width * channels) {
+        if (tex_frame->linesize[0] == tex_frame->width * gs->mask_channels) {
             // bunch copy
-            memcpy(gs->mask_data + frame_data_size * i, tex_frame->data[0], tex_frame->linesize[0] * height);
+            memcpy(gs->mask_data + frame_data_size * i, tex_frame->data[0], tex_frame->linesize[0] * tex_frame->height);
         }
         else {
             // line copy
             int data_offset = 0;
             int frame_offset = 0;
-            for (int line=0;line<height;line++) { 
-                memcpy(gs->mask_data + frame_data_size * i + data_offset, tex_frame->data[0] + frame_offset, width * channels);
-                data_offset += width * channels;
+            for (int line=0;line<tex_frame->height;line++) { 
+                memcpy(gs->mask_data + frame_data_size * i + data_offset, 
+                    tex_frame->data[0] + frame_offset, 
+                    tex_frame->width * gs->mask_channels);
+                data_offset += tex_frame->width * gs->mask_channels;
                 frame_offset += tex_frame->linesize[0];
             }
         }
@@ -649,6 +676,19 @@ static int tex_setup(AVFilterLink *inlink)
         av_frame_free(&tex_frame);
 #endif
     }
+
+    glGenTextures(1, &gs->mask_tex);
+    glActiveTexture(GL_TEXTURE0 + 1);
+
+    glBindTexture(GL_TEXTURE_2D, gs->mask_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, gs->mask_pix_fmt, gs->mask_width, gs->mask_height, 0, gs->mask_pix_fmt, GL_UNSIGNED_BYTE, NULL);
+
+    glUniform1i(glGetUniformLocation(gs->program, "mask_tex"), 1);
 
     return 0;
 }
@@ -882,8 +922,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     glActiveTexture(GL_TEXTURE0 + 1);
     glBindTexture(GL_TEXTURE_2D, gs->mask_tex);
     int idx = (int)(time * 1000.0 / 40.0) % 48;
-    int offset = 500 * 500 * 4 * idx;
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 500, 500, 0, GL_RGBA, GL_UNSIGNED_BYTE, gs->mask_data + offset);
+    int offset = gs->mask_width * gs->mask_height * gs->mask_channels * idx;
+    glTexImage2D(GL_TEXTURE_2D, 0, gs->mask_pix_fmt, gs->mask_width, gs->mask_height, 
+        0, gs->mask_pix_fmt, GL_UNSIGNED_BYTE, gs->mask_data + offset);
     
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
