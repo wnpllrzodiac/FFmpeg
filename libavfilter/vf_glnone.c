@@ -14,6 +14,11 @@
 // export DISPLAY=:0.0
 // ffmpeg_g -i ~/work/media/astroboy.mp4 -vf scale=640x480,glnone -c:v libx264 -b:v 512k -c:a copy -t 10 -y out.mp4
 
+// headless server run
+// xvfb
+// MUST comment out glutil.h GL_TRANSITION_USING_EGL
+// xvfb-run -a -s "-screen 0 1280x720x24 -ac -nolisten tcp -dpi 96 +extension RANDR" /home/shortvideo/michael/tools/ffmpeg/bin/ffmpeg -y -i /home/shortvideo/michael/media/seg/0.mp4 -filter_complex glmirror -c:v libx264 -crf 21 -c:a aac -b:a 64k -shortest -movflags faststart out.mp4
+
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
 #else
