@@ -1,8 +1,12 @@
 #include "libavutil/opt.h"
 #include "internal.h"
 #include "glutil.h"
+#ifdef USE_FREEIMAGE
 #include "FreeImage.h"
-
+#else
+#include "lavfutils.h"
+#include "libavutil/pixdesc.h"
+#endif
 // sudo apt-get install libfreeimage-dev
 // ./ffplay r3.mp4 -vf glmask=tex_count=48:tex_path_fmt='libavfilter/oglfilter/1/a_%d.png' -an
 
@@ -572,6 +576,7 @@ static int tex_setup(AVFilterLink *inlink)
     for (int i=0 ; i < gs->mask_pic_num ; i++) {
         char filename[256] = {0};
         sprintf(filename, gs->mask_pic_fmt, i);
+#ifdef USE_FREEIMAGE
         FIBITMAP *img = FreeImage_Load(FIF_PNG, filename, 0);
         if (!img) {
             av_log(NULL, AV_LOG_ERROR, "failed to open image file: %s\n", filename);
@@ -598,6 +603,35 @@ static int tex_setup(AVFilterLink *inlink)
 
         memcpy(gs->mask_data + w * h * bpp / 8 * i, data, w * h * bpp / 8);
         FreeImage_Unload(img);
+#else
+        int ret;
+        AVFrame *tex_frame = av_frame_alloc();
+        if (!tex_frame)
+            return AVERROR(ENOMEM);
+
+        if ((ret = ff_load_image(tex_frame->data, tex_frame->linesize,
+                                &tex_frame->width, &tex_frame->height,
+                                &tex_frame->format, filename, gs)) < 0)
+        {
+            av_log(ctx, AV_LOG_ERROR, "failed to load texture file: %s\n", filename);
+            return ret;
+        } 
+
+        if (tex_frame->format != AV_PIX_FMT_RGB24 && tex_frame->format != AV_PIX_FMT_RGBA) {
+            av_log(ctx, AV_LOG_ERROR, "texture image is not a rgb image: %d(%s)\n", 
+                tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
+            return AVERROR(EINVAL);
+        }
+
+        int width = tex_frame->width;
+        int height = tex_frame->height;
+        int frame_data_size = tex_frame->linesize[0] * tex_frame->height;
+        if (!gs->mask_data)
+            gs->mask_data = av_mallocz(tex_frame->linesize[0] * tex_frame->height * gs->mask_pic_num);
+        
+        memcpy(gs->mask_data + frame_data_size * i, tex_frame->data[0], tex_frame->linesize[0] * tex_frame->height);
+        av_frame_free(&tex_frame);
+#endif
     }
 
     return 0;

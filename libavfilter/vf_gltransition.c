@@ -2,8 +2,12 @@
 #include "internal.h"
 #include "framesync.h"
 #include "glutil.h"
+#ifdef USE_FREEIMAGE
 #include "FreeImage.h"
-
+#else
+#include "lavfutils.h"
+#include "libavutil/pixdesc.h"
+#endif
 #include <string.h>
 
 // refer to https://github.com/transitive-bullshit/ffmpeg-gl-transition
@@ -224,7 +228,7 @@ static void vbo_setup(GlTransitionContext *gs)
     glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
 }
 
-static void tex_setup(AVFilterLink *inlink)
+static int tex_setup(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
     GlTransitionContext *gs = ctx->priv;
@@ -261,6 +265,7 @@ static void tex_setup(AVFilterLink *inlink)
 
     { // extra texture
         if (gs->extra_texture_filepath) { // extra_texture
+#ifdef USE_FREEIMAGE
             int width, height, channels;
 
             FIBITMAP *img = FreeImage_Load(FIF_PNG, gs->extra_texture_filepath, 0);
@@ -289,7 +294,36 @@ static void tex_setup(AVFilterLink *inlink)
             }
 
             memcpy(gs->tex_data, data, width * height * channels);
+            FreeImage_Unload(img);
+#else
+            int ret;
+            AVFrame *tex_frame = av_frame_alloc();
+            if (!tex_frame)
+                return AVERROR(ENOMEM);
 
+            if ((ret = ff_load_image(tex_frame->data, tex_frame->linesize,
+                                    &tex_frame->width, &tex_frame->height,
+                                    &tex_frame->format, gs->extra_texture_filepath, gs)) < 0)
+            {
+                av_log(ctx, AV_LOG_ERROR, "failed to load texture file: %s\n", gs->extra_texture_filepath);
+                return ret;
+            }
+                
+
+            if (tex_frame->format != AV_PIX_FMT_RGB24 && tex_frame->format != AV_PIX_FMT_RGBA) {
+                av_log(ctx, AV_LOG_ERROR, "texture image is not a rgb image: %d(%s)\n", 
+                    tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
+                return AVERROR(EINVAL);
+            }
+
+            int width = tex_frame->width;
+            int height = tex_frame->height;
+            if (!gs->tex_data)
+                gs->tex_data = av_mallocz(tex_frame->linesize[0] * tex_frame->height);
+            
+            memcpy(gs->tex_data, tex_frame->data[0], tex_frame->linesize[0] * tex_frame->height);
+            av_frame_free(&tex_frame);
+#endif
             glGenTextures(1, &gs->extra_tex);
             glActiveTexture(GL_TEXTURE0 + 2);
             glBindTexture(GL_TEXTURE_2D, gs->extra_tex);
@@ -302,10 +336,10 @@ static void tex_setup(AVFilterLink *inlink)
             glTexImage2D(GL_TEXTURE_2D, 0, gs->pix_fmt, width, height, 0, gs->pix_fmt, GL_UNSIGNED_BYTE, gs->tex_data);
 
             glUniform1i(glGetUniformLocation(gs->program, "extra_tex"), 2);
-
-            FreeImage_Unload(img);
         }
     }
+
+    return 0;
 }
 
 static int build_program(AVFilterContext *ctx)
@@ -703,8 +737,7 @@ static int config_props(AVFilterLink *inlink)
     glUseProgram(gs->program);
     vbo_setup(gs);
     setup_uniforms(inlink);
-    tex_setup(inlink);
-    return 0;
+    return tex_setup(inlink);
 }
 
 static av_cold void uninit(AVFilterContext *ctx)
