@@ -1,6 +1,7 @@
 #include "libavutil/opt.h"
 #include "internal.h"
 #include "glutil.h"
+#include <stdio.h> // for fread
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -105,6 +106,10 @@ typedef struct
     char *glver;
     char *precision;
     char *uniforms;
+    int print_shader_src;
+
+    int line_copy;
+    uint8_t *img_data;
 
     GLint time;
 
@@ -130,6 +135,7 @@ static const AVOption glcommon_options[] = {
     {"glver", "opengl version, default 130", OFFSET(glver), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, 16, FLAGS},
     {"precision", "precision settings: lowp, mediump, highp", OFFSET(precision), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, 16, FLAGS},
     {"uniforms", "uniform vars setting, e.g. uniforms='some_var=1.0&other_var=1&direction=vec2(0.0,1.0)'", OFFSET(uniforms), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
+    {"printshadercode", "whether to print shader code to debug", OFFSET(print_shader_src), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(glcommon);
@@ -216,7 +222,12 @@ static int build_program(AVFilterContext *ctx)
         fseek(f, 0, SEEK_SET);
 
         source = malloc(fsize + 1);
-        fread(source, fsize, 1, f);
+        int readed = fread(source, fsize, 1, f);
+        if (readed != 1) {
+            av_log(ctx, AV_LOG_ERROR, "failed to read shader file: %s\n", gs->source);
+            return -1;
+        }
+
         fclose(f);
 
         source[fsize] = 0;
@@ -239,7 +250,7 @@ static int build_program(AVFilterContext *ctx)
 #endif
     snprintf(gs->f_shader_source, len * sizeof(*gs->f_shader_source), 
         f_shader_template, gl_header, frag_source);
-    av_log(ctx, AV_LOG_ERROR, "\n%s\n", gs->f_shader_source);
+    av_log(ctx, gs->print_shader_src ? AV_LOG_INFO : AV_LOG_DEBUG, "shader source:\n%s\n", gs->f_shader_source);
 
     if (source) {
         free(source);
@@ -488,6 +499,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     AVFilterContext *ctx = inlink->dst;
     GlCommonContext *gs = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
+    int i;
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
     if (!out) {
@@ -501,15 +513,30 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         time -= (int)time / 3 * 3;
     glUniform1f(gs->time, time);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-
-    if (out->linesize[0] != outlink->w * 3/*rgb*/) {
-        av_frame_free(&in);
-        av_log(NULL, AV_LOG_ERROR, "image has padding: linesize %d, w %d\n", 
-            out->linesize[0], outlink->w);
-        return AVERROR(ENOMEM);
+    if (in->linesize[0] != in->width * 3 && !gs->line_copy) {
+        //av_frame_free(&in);
+        av_log(NULL, AV_LOG_INFO, "image has padding: linesize %d, w %d\n", 
+            in->linesize[0], in->width);
+        gs->line_copy = 1;
+        gs->img_data = (uint8_t *)av_mallocz(outlink->w * 3 * outlink->h);
+        //return AVERROR(ENOMEM);
     }
+
+    if (gs->line_copy) {
+        out->linesize[0] = in->width * 3;
+        
+        int offset = 0;
+        for (i=0;i<in->height;i++) {
+            memcpy(gs->img_data + offset, in->data[0] + in->linesize[0] * i, in->width * 3);
+            offset += in->width * 3;
+        }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, gs->img_data);
+    }
+    else {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    }
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glReadPixels(0, 0, outlink->w, outlink->h, 
         PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
@@ -521,6 +548,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 static av_cold void uninit(AVFilterContext *ctx)
 {
     GlCommonContext *gs = ctx->priv;
+
+    if (gs->img_data) {
+        av_free(gs->img_data);
+        gs->img_data = NULL;
+    }
 
 #ifdef GL_TRANSITION_USING_EGL
     if (gs->eglDpy) {
