@@ -71,11 +71,9 @@ static const GLchar *v_shader_source =
     "}\n";
 
 static const GLchar *f_shader_template =
-#ifndef __ANDROID__
-    "#version 130\n" // desktop ogl must declare version before set precision
-#endif
-    "precision %s float;\n"
-    "\n"
+    //"#version %s\n" // 130, desktop ogl must declare version before set precision
+    //"precision %s float;\n"
+    "%s"
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
 
@@ -104,6 +102,7 @@ typedef struct
     int repeat;
 
     char *source;
+    char *glver;
     char *precision;
     char *uniforms;
 
@@ -128,8 +127,9 @@ static const AVOption glcommon_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {"repeat", "repeat render in secs", OFFSET(repeat), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {"source", "path to the gl-transition source file (defaults to basic fade)", OFFSET(source), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, CHAR_MAX, FLAGS},
+    {"glver", "opengl version, default 130", OFFSET(glver), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, 16, FLAGS},
     {"precision", "precision settings: lowp, mediump, highp", OFFSET(precision), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, 16, FLAGS},
-    { "uniforms", "uniform vars setting, e.g. uniforms='some_var=1.0&other_var=1&direction=vec2(0.0,1.0)'", OFFSET(uniforms), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
+    {"uniforms", "uniform vars setting, e.g. uniforms='some_var=1.0&other_var=1&direction=vec2(0.0,1.0)'", OFFSET(uniforms), AV_OPT_TYPE_STRING, {.str=NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(glcommon);
@@ -223,15 +223,22 @@ static int build_program(AVFilterContext *ctx)
     }
 
     const char *frag_source = source ? source : f_default_frag_source;
-    const char *prec = gs->precision ? gs->precision : f_default_shader_precision;
-    int len = strlen(f_shader_template) + strlen(frag_source) + 16/*precision*/;
+    const char *precision = gs->precision ? gs->precision : f_default_shader_precision;
+    int len = strlen(f_shader_template) + strlen(frag_source) + 16/*precision*/ + 16/*ver*/;
     gs->f_shader_source = av_calloc(len, sizeof(*gs->f_shader_source));
     if (!gs->f_shader_source) {
         return AVERROR(ENOMEM);
     }
 
+    char gl_header[64] = {0};
+#ifdef __ANDROID__
+    snprintf(gl_header, 64, "precision %s float;\n", precision);
+#else
+    if (gs->glver && precision)
+        snprintf(gl_header, 64, "#version %s\nprecision %s float;\n", gs->glver, precision);
+#endif
     snprintf(gs->f_shader_source, len * sizeof(*gs->f_shader_source), 
-        f_shader_template, prec, frag_source);
+        f_shader_template, gl_header, frag_source);
     av_log(ctx, AV_LOG_ERROR, "\n%s\n", gs->f_shader_source);
 
     if (source) {

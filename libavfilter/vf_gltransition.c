@@ -23,6 +23,11 @@
 
 // https://gl-transitions.com/gallery
 
+// For any non-trivial concatenation, you'll likely want to make a filter chain comprised of split, 
+// trim + setpts, and concat (with the v for video option) filters in addition to the gltransition filter itself. 
+// If you want to concat audio streams in the same pass, you'll need to additionally make use of the asplit, 
+// atrim + asetpts, and concat (with the a for audio option) filters.
+
 #include <float.h> // for DBL_MAX
 
 #ifdef __APPLE__
