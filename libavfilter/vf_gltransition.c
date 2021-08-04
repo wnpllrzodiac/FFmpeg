@@ -649,7 +649,7 @@ static void setup_uniforms(AVFilterLink *fromLink)
                         av_log(ctx, AV_LOG_ERROR, "value %s not supported, supported: int float ivec vec)", sa.strings[i + 1]);
                     }
                 } else {
-                av_log(ctx, AV_LOG_ERROR, "can't get location of uniform: %s,fail set value: %s\n", sa.strings[i],
+                av_log(ctx, AV_LOG_ERROR, "can't get location of uniform: %s, fail set value: %s\n", sa.strings[i],
                         sa.strings[i + 1]);
                 }
             } // for
