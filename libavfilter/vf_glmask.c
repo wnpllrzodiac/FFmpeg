@@ -499,7 +499,7 @@ static const AVOption glmask_options[] = {
     {"alpha", "blend alpha value [0.0, 1.0]", OFFSET(alpha), AV_OPT_TYPE_DOUBLE, {.dbl = 0.9}, 0, 1.0, FLAGS},
     {"mode", "blend mode [0, 26]", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 26, FLAGS},
     {"tex_count", "total texture file count", OFFSET(mask_pic_num), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 200, FLAGS},
-    { "tex_path_fmt", "texture file format, e.g.: image/%d.png", OFFSET(mask_pic_fmt), AV_OPT_TYPE_STRING, {.str = "0"}, 0, 0, FLAGS },
+    {"tex_path_fmt", "texture file format, e.g.: image/%d.png", OFFSET(mask_pic_fmt), AV_OPT_TYPE_STRING, {.str = "0"}, 0, 0, FLAGS },
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(glmask);
@@ -925,7 +925,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     glActiveTexture(GL_TEXTURE0 + 1);
     glBindTexture(GL_TEXTURE_2D, gs->mask_tex);
-    int idx = (int)(time * 1000.0 / 40.0) % 48;
+    int idx = (int)(time * 1000.0 / 40.0) % mask_pic_num;
     int offset = gs->mask_width * gs->mask_height * gs->mask_channels * idx;
     glTexImage2D(GL_TEXTURE_2D, 0, gs->mask_pix_fmt, gs->mask_width, gs->mask_height, 
         0, gs->mask_pix_fmt, GL_UNSIGNED_BYTE, gs->mask_data + offset);

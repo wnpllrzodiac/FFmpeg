@@ -1,6 +1,8 @@
 #include "libavutil/opt.h"
 #include "internal.h"
 #include "glutil.h"
+#include "lavfutils.h"
+#include "libavutil/pixdesc.h"
 
 #ifdef __APPLE__
 #include <OpenGL/gl3.h>
@@ -17,6 +19,8 @@
 #else
 # include <GLFW/glfw3.h>
 #endif
+
+// ./ffplay -i /mnt/e/git/testpy/xfade_transition/seg/0.mp4 -vf "glcentercrop=tex_count=60:tex_path_fmt=libavfilter/oglfilter/res/lightning/clipname_%03d.png" -an
 
 // 转场 动漫火焰,动漫闪电
 #ifdef GL_TRANSITION_USING_EGL
@@ -68,21 +72,87 @@ static const GLchar *v_shader_source =
     "}\n";
 
 static const GLchar *f_shader_source =
-    "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
-    "uniform int type;\n"
-    "void main() {\n"
-    "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
-    "  if (type == 0) {\n"
-    "    if (uv.x > 0.5) {\n"
-    "      uv.x = 1.0 - uv.x;\n"
+    "\n"
+    "uniform sampler2D tex;\n"
+    "uniform sampler2D blendTexture;\n"
+    "\n"
+    "uniform int baseTexWidth;\n"
+    "uniform int baseTexHeight;\n"
+    "uniform vec2 fullBlendTexSize;\n"
+    "\n"
+    "uniform float alphaFactor;\n"
+    "\n"
+    "// uniform float timer;\n"
+    "\n"
+    "// normal\n"
+    "vec3 blendNormal(vec3 base, vec3 blend) {\n"
+    "    return blend;\n"
+    "}\n"
+    "\n"
+    "vec3 blendNormal(vec3 base, vec3 blend, float opacity) {\n"
+    "    return (blendNormal(base, blend) * opacity + blend * (1.0 - opacity));\n"
+    "}\n"
+    "\n"
+    "vec3 blendFunc(vec3 base, vec3 blend, float opacity,int blendMode) {\n"
+    "    // blendMode == 0)\n"
+    "    return (blendNormal(base, blend) * opacity + base * (1.0 - opacity));\n"
+    "}\n"
+    "\n"
+    "vec2 sucaiAlign(vec2 videoUV,vec2 videoSize,vec2 sucaiSize,vec2 anchorImageCoord,float sucaiScale)\n"
+    "{\n"
+    "    vec2 videoImageCoord = videoUV * videoSize;\n"
+    "    vec2 sucaiUV= (videoImageCoord - anchorImageCoord)/(sucaiSize * sucaiScale) + vec2(0.5);\n"
+    "    return sucaiUV;\n"
+    "}\n"
+    "\n"
+    "vec4 blendColor(sampler2D sucai, vec4 baseColor,vec2 videoSize,vec2 sucaiSize,vec2 anchorImageCoord,float sucaiScale)\n"
+    "{\n"
+    "    vec4 resultColor = baseColor;\n"
+    "\n"
+    "    vec2 sucaiUV = sucaiAlign(texCoord,videoSize,sucaiSize,anchorImageCoord,sucaiScale);\n"
+    "\n"
+    "    vec4 fgColor = baseColor;\n"
+    "\n"
+    "     if(sucaiUV.x >= 0.0 && sucaiUV.x <= 1.0 && sucaiUV.y >= 0.0 && sucaiUV.y <= 1.0 ) {\n"
+    "        // sucaiUV.y = 1.0 - sucaiUV.y;\n"
+    "        fgColor = texture2D(sucai,sucaiUV);\n"
+    "    } else {\n"
+    "        return baseColor;\n"
     "    }\n"
-    "  } else {\n"
-    "    if (uv.y > 0.5) {\n"
-    "      uv.y = 1.0 - uv.y;\n"
+    "\n"
+    "    fgColor = fgColor * alphaFactor;\n"
+    "\n"
+    "    int newBlendMode = 0;//blendMode; \n"
+    "\n"
+    "    vec3 color = blendFunc(baseColor.rgb, clamp(fgColor.rgb * (1.0 / fgColor.a), 0.0, 1.0), 1.0,newBlendMode);\n"
+    "    resultColor.rgb = baseColor.rgb * (1.0 - fgColor.a) + color.rgb * fgColor.a;  \n"
+    "    resultColor.a = 1.0;    \n"
+    "  \n"
+    "    return resultColor;\n"
+    "}\n"
+    "\n"
+    "void main(void) \n"
+    "{\n"
+    "    vec2 uv_ = vec2(texCoord.x, 1.0 - texCoord.y);"
+    "    vec2 baseTexureSize = vec2(baseTexWidth,baseTexHeight);\n"
+    "    vec2 fullBlendAnchor = baseTexureSize * 0.5;\n"
+    "    float scale = 1.0;\n"
+    "\n"
+    "    //外居中对齐\n"
+    "    float baseAspectRatio = baseTexureSize.y/baseTexureSize.x;\n"
+    "    float blendAspectRatio = fullBlendTexSize.y/fullBlendTexSize.x;\n"
+    "    if(baseAspectRatio >= blendAspectRatio) {\n"
+    "        scale = baseTexureSize.y / fullBlendTexSize.y;   \n"
+    "    } else {\n"
+    "        scale = baseTexureSize.x / fullBlendTexSize.x; \n"
     "    }\n"
-    "  }\n"
-    "  gl_FragColor = texture2D(tex, uv);\n"
+    "\n"
+    "    vec4 baseColor = texture2D(tex,uv_);\n"
+    "    vec4 fullblendColor = blendColor(blendTexture,baseColor,baseTexureSize,fullBlendTexSize,\n"
+    "        fullBlendAnchor,scale);\n"
+    "\n"
+    "    gl_FragColor = fullblendColor;\n"
     "}\n";
 
 #define PIXEL_FORMAT GL_RGB
@@ -92,11 +162,20 @@ typedef struct
     const AVClass *class;
     GLuint program;
     GLuint frame_tex;
+    GLuint mask_tex;
     GLuint pos_buf;
     GLint pos_type;
 
     int no_window;
     int type;
+
+    uint8_t *mask_data;
+    int mask_pic_num;
+    char *mask_pic_fmt;
+    int mask_width;
+    int mask_height;
+    int mask_channels;
+    int mask_pix_fmt;
 
 #ifdef GL_TRANSITION_USING_EGL
     EGLDisplay      eglDpy;
@@ -113,6 +192,8 @@ typedef struct
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption glcentercrop_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
+    {"tex_count", "total texture file count", OFFSET(mask_pic_num), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 200, FLAGS},
+    {"tex_path_fmt", "texture file format, e.g.: image/%d.png", OFFSET(mask_pic_fmt), AV_OPT_TYPE_STRING, {.str = "0"}, 0, 0, FLAGS },
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(glcentercrop);
@@ -154,7 +235,7 @@ static void vbo_setup(GlCenterCropContext *gs)
     glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
 }
 
-static void tex_setup(AVFilterLink *inlink)
+static int tex_setup(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
     GlCenterCropContext *gs = ctx->priv;
@@ -171,6 +252,102 @@ static void tex_setup(AVFilterLink *inlink)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
 
     glUniform1i(glGetUniformLocation(gs->program, "tex"), 0);
+
+    // mask
+    if (gs->mask_pic_fmt == NULL || gs->mask_pic_num == 0 || gs->mask_pic_num > 256) {
+        av_log(NULL, AV_LOG_ERROR, "invalid mask pic settings\n");
+        return -1;
+    }
+
+    for (int i=0 ; i < gs->mask_pic_num ; i++) {
+        char filename[256] = {0};
+        sprintf(filename, gs->mask_pic_fmt, i);
+        int ret;
+        AVFrame *tex_frame = av_frame_alloc();
+        if (!tex_frame)
+            return AVERROR(ENOMEM);
+
+        if ((ret = ff_load_image(tex_frame->data, tex_frame->linesize,
+                                &tex_frame->width, &tex_frame->height,
+                                &tex_frame->format, filename, gs)) < 0)
+        {
+            av_log(ctx, AV_LOG_ERROR, "failed to load texture file: %s\n", filename);
+            return ret;
+        } 
+
+        if (tex_frame->format != AV_PIX_FMT_RGB24 && tex_frame->format != AV_PIX_FMT_RGBA && 
+                tex_frame->format != AV_PIX_FMT_GRAY8 && tex_frame->format != AV_PIX_FMT_PAL8) {
+            av_log(ctx, AV_LOG_ERROR, "texture image is not a rgb image: %d(%s)\n", 
+                tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
+            return AVERROR(EINVAL);
+        }
+
+        gs->mask_width = tex_frame->width;
+        gs->mask_height = tex_frame->height;
+        switch (tex_frame->format) {
+        case AV_PIX_FMT_RGB24:
+            gs->mask_channels = 3;
+            gs->mask_pix_fmt = GL_RGB;
+            break;
+        case AV_PIX_FMT_RGBA:
+            gs->mask_channels = 4;
+            gs->mask_pix_fmt = GL_RGBA;
+            break;
+        case AV_PIX_FMT_GRAY8:
+        case AV_PIX_FMT_PAL8:
+            gs->mask_channels = 1;
+            gs->mask_pix_fmt = GL_RED;
+            break;
+        default:
+            av_log(ctx, AV_LOG_ERROR, "unsupported pix format: %d(%s)\n", 
+                tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
+            return AVERROR(EINVAL);
+        }
+        // linesize[0] > width * channels, e.g. 2016 vs 500 * 4
+        int frame_data_size = tex_frame->width * tex_frame->height * gs->mask_channels;
+        if (!gs->mask_data)
+            gs->mask_data = av_mallocz(frame_data_size * gs->mask_pic_num);
+        
+        if (tex_frame->linesize[0] == tex_frame->width * gs->mask_channels) {
+            // bunch copy
+            memcpy(gs->mask_data + frame_data_size * i, tex_frame->data[0], tex_frame->linesize[0] * tex_frame->height);
+        }
+        else {
+            // line copy
+            int data_offset = 0;
+            int frame_offset = 0;
+            for (int line=0;line<tex_frame->height;line++) { 
+                memcpy(gs->mask_data + frame_data_size * i + data_offset, 
+                    tex_frame->data[0] + frame_offset, 
+                    tex_frame->width * gs->mask_channels);
+                data_offset += tex_frame->width * gs->mask_channels;
+                frame_offset += tex_frame->linesize[0];
+            }
+        }
+        
+        av_frame_free(&tex_frame);
+    }
+
+    glGenTextures(1, &gs->mask_tex);
+    glActiveTexture(GL_TEXTURE0 + 1);
+
+    glBindTexture(GL_TEXTURE_2D, gs->mask_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, gs->mask_pix_fmt, gs->mask_width, gs->mask_height, 0, gs->mask_pix_fmt, GL_UNSIGNED_BYTE, NULL);
+
+    glUniform1i(glGetUniformLocation(gs->program, "blendTexture"), 1);
+
+    // set other uniforms
+    glUniform1i(glGetUniformLocation(gs->program, "baseTexWidth"), gs->mask_width);
+    glUniform1i(glGetUniformLocation(gs->program, "baseTexHeight"), gs->mask_height);
+    glUniform2f(glGetUniformLocation(gs->program, "fullBlendTexSize"), inlink->w, inlink->h);
+    glUniform1f(glGetUniformLocation(gs->program, "alphaFactor"), 1.0f);
+    
+    return 0;
 }
 
 static int build_program(AVFilterContext *ctx)
@@ -351,7 +528,10 @@ static int config_props(AVFilterLink *inlink)
     glUseProgram(gs->program);
     vbo_setup(gs);
     setup_uniforms(inlink);
-    tex_setup(inlink);
+    if (tex_setup(inlink) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "failed to setup texture\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -359,6 +539,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
     AVFilterLink *outlink = ctx->outputs[0];
+    GlCenterCropContext *gs = ctx->priv;
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
     if (!out)
@@ -368,7 +549,20 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
     av_frame_copy_props(out, in);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    float time = in->pts * av_q2d(inlink->time_base);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gs->frame_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 
+        outlink->w, outlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+
+    glActiveTexture(GL_TEXTURE0 + 1);
+    glBindTexture(GL_TEXTURE_2D, gs->mask_tex);
+    int idx = (int)(time * 1000.0 / 40.0) % gs->mask_pic_num;
+    int offset = gs->mask_width * gs->mask_height * gs->mask_channels * idx;
+    glTexImage2D(GL_TEXTURE_2D, 0, gs->mask_pix_fmt, gs->mask_width, gs->mask_height, 
+        0, gs->mask_pix_fmt, GL_UNSIGNED_BYTE, gs->mask_data + offset);
+
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
 
