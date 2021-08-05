@@ -925,7 +925,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     glActiveTexture(GL_TEXTURE0 + 1);
     glBindTexture(GL_TEXTURE_2D, gs->mask_tex);
-    int idx = (int)(time * 1000.0 / 40.0) % mask_pic_num;
+    int idx = (int)(time * 1000.0 / 40.0) % gs->mask_pic_num;
     int offset = gs->mask_width * gs->mask_height * gs->mask_channels * idx;
     glTexImage2D(GL_TEXTURE_2D, 0, gs->mask_pix_fmt, gs->mask_width, gs->mask_height, 
         0, gs->mask_pix_fmt, GL_UNSIGNED_BYTE, gs->mask_data + offset);

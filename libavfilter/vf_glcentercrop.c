@@ -276,7 +276,7 @@ static int tex_setup(AVFilterLink *inlink)
         } 
 
         if (tex_frame->format != AV_PIX_FMT_RGB24 && tex_frame->format != AV_PIX_FMT_RGBA && 
-                tex_frame->format != AV_PIX_FMT_GRAY8 && tex_frame->format != AV_PIX_FMT_PAL8) {
+                tex_frame->format != AV_PIX_FMT_GRAY8) {
             av_log(ctx, AV_LOG_ERROR, "texture image is not a rgb image: %d(%s)\n", 
                 tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
             return AVERROR(EINVAL);
@@ -294,7 +294,6 @@ static int tex_setup(AVFilterLink *inlink)
             gs->mask_pix_fmt = GL_RGBA;
             break;
         case AV_PIX_FMT_GRAY8:
-        case AV_PIX_FMT_PAL8:
             gs->mask_channels = 1;
             gs->mask_pix_fmt = GL_RED;
             break;
