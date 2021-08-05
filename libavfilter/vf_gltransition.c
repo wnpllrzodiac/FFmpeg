@@ -19,6 +19,14 @@
 //   [v0][v1]gltransition=duration=0.5:offset=5:source=crosswarp.glsl:uniforms='direction=vec2(0.0,1.0)'" 
 //   -c:v libx264 -b:v 2000k -c:a copy -t 10 -y out.mp4
 
+// jianying lightning
+// ./ffmpeg -ss 60 -i /mnt/d/Archive/Media/3DM_WOMAN.mp4 -i /mnt/d/Archive/Media/TimeCode.mov 
+// -filter_complex "[0:v]scale=640:480[v0];[1:v]scale=640:480[v1];
+// [v0][v1]gltransition=duration=2:offset=5:
+// source=/mnt/e/git/FFmpeg/libavfilter/oglfilter/jianying/lightning.glsl:
+// extra_texture_count=60:extra_texture_path_fmt=libavfilter/oglfilter/res/lightning/clipname_%03d.png" 
+// -c:v libx264 -b:v 2000k -c:a copy -t 10 -y out.mp4
+
 // gltransition=duration=0.5:offset=3:source=wd.glsl:uniforms='amplitude=30.0&speed=30.0'"
 
 // https://gl-transitions.com/gallery
@@ -404,9 +412,6 @@ static int tex_setup(AVFilterLink *inlink)
         }
 
         if (gs->mask_pic_fmt && gs->mask_pic_num > 0) { // extra_texture
-            int channels;
-            int pix_fmt;
-
             for (int i=0 ; i < gs->mask_pic_num ; i++) {
                 char filename[256] = {0};
                 sprintf(filename, gs->mask_pic_fmt, i);
@@ -484,15 +489,20 @@ static int tex_setup(AVFilterLink *inlink)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
-            glTexImage2D(GL_TEXTURE_2D, 0, gs->mask_pix_fmt, gs->mask_width, gs->mask_height, 0, gs->mask_pix_fmt, GL_UNSIGNED_BYTE, NULL);
+            glTexImage2D(GL_TEXTURE_2D, 0, gs->mask_pix_fmt, gs->mask_width, gs->mask_height, 
+                0, gs->mask_pix_fmt, GL_UNSIGNED_BYTE, NULL);
 
             glUniform1i(glGetUniformLocation(gs->program, "extra_tex"), 2);
 
             // set other uniforms
+            float alphaFactor = 1.0f;
             glUniform1i(glGetUniformLocation(gs->program, "baseTexWidth"), gs->mask_width);
             glUniform1i(glGetUniformLocation(gs->program, "baseTexHeight"), gs->mask_height);
-            glUniform2f(glGetUniformLocation(gs->program, "fullBlendTexSize"), inlink->w, inlink->h);
-            glUniform1f(glGetUniformLocation(gs->program, "alphaFactor"), 1.0f);
+            glUniform2f(glGetUniformLocation(gs->program, "fullBlendTexSize"), 
+                inlink->w, inlink->h);
+            glUniform1f(glGetUniformLocation(gs->program, "alphaFactor"), alphaFactor);
+            av_log(ctx, AV_LOG_INFO, "set uniforms: tex %d x %d -> out %d x %d, alpha %.2f\n",
+                gs->mask_width, gs->mask_height, inlink->w, inlink->h, alphaFactor);
         }
     }
 
@@ -613,6 +623,7 @@ static AVFrame *apply_transition(FFFrameSync *fs,
         if (idx > c->mask_pic_num - 1)
             idx = c->mask_pic_num - 1;
         int offset = c->mask_width * c->mask_height * c->mask_channels * idx;
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, c->mask_width);
         glTexImage2D(GL_TEXTURE_2D, 0, c->mask_pix_fmt, c->mask_width, c->mask_height, 
             0, c->mask_pix_fmt, GL_UNSIGNED_BYTE, c->tex_data + offset);
     }
@@ -917,7 +928,7 @@ static av_cold void uninit(AVFilterContext *ctx)
     if (gs->eglDpy) {
         glDeleteTextures(1, &gs->from);
         glDeleteTextures(1, &gs->to);
-        if (gs->extra_texture_filepath)
+        if (gs->extra_texture_filepath || gs->mask_pic_fmt)
             glDeleteTextures(1, &gs->extra_tex);
         glDeleteProgram(gs->program);
         glDeleteBuffers(1, &gs->pos_buf);
@@ -934,6 +945,11 @@ static av_cold void uninit(AVFilterContext *ctx)
         glfwDestroyWindow(gs->window);
     }
 #endif
+
+    if (gs->tex_data) {
+        av_free(gs->tex_data);
+        gs->tex_data = NULL;
+    }
 }
 
 static int query_formats(AVFilterContext *ctx)

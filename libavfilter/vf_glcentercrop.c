@@ -588,6 +588,11 @@ static av_cold void uninit(AVFilterContext *ctx)
         glfwDestroyWindow(gs->window);
     }
 #endif
+
+    if (gs->mask_data) {
+        av_free(gs->mask_data);
+        gs->mask_data = NULL;
+    }
 }
 
 static int query_formats(AVFilterContext *ctx)
