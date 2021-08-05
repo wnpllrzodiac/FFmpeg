@@ -6,6 +6,7 @@ uniform vec2 fullBlendTexSize;
 
 uniform float alphaFactor;
 
+// 动漫火焰 动漫闪电 动漫云朵
 // uniform float timer;
 
 // normal
@@ -33,7 +34,8 @@ vec4 blendColor(sampler2D sucai, vec4 baseColor,vec2 videoSize,vec2 sucaiSize,ve
 {
     vec4 resultColor = baseColor;  
 
-    vec2 sucaiUV = sucaiAlign(texCoord,videoSize,sucaiSize,anchorImageCoord,sucaiScale);
+    vec2 uv_ = vec2(texCoord.x, 1.0 - texCoord.y);
+    vec2 sucaiUV = sucaiAlign(uv_,videoSize,sucaiSize,anchorImageCoord,sucaiScale);
 
     vec4 fgColor = baseColor;
 
