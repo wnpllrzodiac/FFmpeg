@@ -17,6 +17,12 @@
 // ffmpeg -i /mnt/d/Archive/Media/timecode.3gp -i out.png -filter_complex [0:v][1:v]overlay[outv] 
 //    -map [outv] -map 0:a -c:v libx264 -b:v 512k -c:a copy -t 10 out.mp4
 
+// support alpha png
+// ./ffmpeg -y -i ~/michael/media/d_9.mp4 -filter_complex 
+// "color=c=black@0:s=760x144,format=rgba,gldrawtext=text=AaopglH李二龙:fontfile=mtr.ttf:
+// fontsize=128:fontcolor=red@1:alphachannel=1"
+// -pix_fmt rgba -frames:v 1 ~/michael/tools/nginx/html/tmp/1.png
+
 #if CONFIG_LIBFONTCONFIG
 #include <fontconfig/fontconfig.h>
 #endif
@@ -94,7 +100,15 @@ static const GLchar *v_shader_source =
     "  texCoord = vec2(_uv.x, 1.0 - _uv.y);\n"
     "}\n";
 
-static const GLchar *f_shader_source = // 向右擦除
+static const GLchar *f_shader_source =
+    "uniform sampler2D tex;\n"
+    "varying vec2 texCoord;\n"
+    "void main() {\n"
+    "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
+    "  gl_FragColor = texture2D(tex, uv);\n"
+    "}\n";
+
+static const GLchar *f_shader_source_wipe_right = // 向右擦除
     "uniform sampler2D tex;\n"
     "varying vec2 texCoord;\n"
     "uniform int u_Time;\n"
@@ -364,6 +378,11 @@ typedef struct
     int no_window;
     int type;
 
+    int alphachannel;
+    // decided by alpha
+    int pix_fmt;
+    int channel_num;
+
 #ifdef GL_TRANSITION_USING_EGL
     EGLDisplay      eglDpy;
     EGLConfig       eglCfg;
@@ -392,10 +411,11 @@ static const AVOption gldrawtext_options[] = {
     {"borderw",     "set border width",     OFFSET(borderw),            AV_OPT_TYPE_INT,    {.i64=0},     INT_MIN,  INT_MAX , FLAGS},
     {"tabsize",     "set tab size",         OFFSET(tabsize),            AV_OPT_TYPE_INT,    {.i64=4},     0,        INT_MAX , FLAGS},
 #if CONFIG_LIBFONTCONFIG
-    { "font",        "Font name",            OFFSET(font),               AV_OPT_TYPE_STRING, { .str = "Sans" },           .flags = FLAGS },
+    {"font",        "Font name",            OFFSET(font),               AV_OPT_TYPE_STRING, { .str = "Sans" },           .flags = FLAGS },
 #endif
     {"reload",     "reload text file for each frame",                       OFFSET(reload),     AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGS},
-    { "alpha",       "apply alpha while rendering", OFFSET(alpha),      AV_OPT_TYPE_INT, {.i64 = 255}, 0, 255, FLAGS},
+    {"alpha",       "apply alpha while rendering", OFFSET(alpha),      AV_OPT_TYPE_INT, {.i64 = 255}, 0, 255, FLAGS},
+    {"alphachannel", "keep alpha channel", OFFSET(alphachannel), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, FLAGS},
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(gldrawtext);
@@ -992,7 +1012,7 @@ static int config_props(AVFilterLink *inlink)
     glViewport(0, 0, inlink->w, inlink->h);
 
     int ret;
-    if ((ret = build_program(ctx, &gs->program, v_shader_source, f_shader_source_bad_typewriter)) < 0)
+    if ((ret = build_program(ctx, &gs->program, v_shader_source, f_shader_source)) < 0)
     {
         av_log(NULL, AV_LOG_ERROR, "failed to build ogl program: %d\n", ret);
         return ret;
@@ -1236,7 +1256,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     const float time = in->pts * av_q2d(inlink->time_base);
     glUniform1f(gs->time, time);
     
-    glUniform1f(glGetUniformLocation(gs->program, "deg"), time / 5.0);
+    //glUniform1f(glGetUniformLocation(gs->program, "deg"), time / 5.0);
     
     draw_text(ctx, in, inlink->w, inlink->h, time);
 
@@ -1244,13 +1264,16 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     float v = time / 5.0f;
     if (v > 1.0)
         v = 1.0;
-    glUniform2f(glGetUniformLocation(gs->program, "eraseUV"), v, 0.0f);
+    //glUniform2f(glGetUniformLocation(gs->program, "eraseUV"), v, 0.0f);
+
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, in->linesize[0] / gs->channel_num);
 
     // render it!!!
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, in->data[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, gs->pix_fmt, inlink->w, inlink->h, 0, gs->pix_fmt, 
+        GL_UNSIGNED_BYTE, in->data[0]);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
-    glReadPixels(0, 0, outlink->w, outlink->h, PIXEL_FORMAT, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
+    glReadPixels(0, 0, outlink->w, outlink->h, gs->pix_fmt, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
 
     av_frame_free(&in);
     return ff_filter_frame(outlink, out);
@@ -1302,8 +1325,36 @@ static av_cold void uninit(AVFilterContext *ctx)
 
 static int query_formats(AVFilterContext *ctx)
 {
-    static const enum AVPixelFormat formats[] = {AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE};
-    return ff_set_common_formats(ctx, ff_make_format_list(formats));
+    //static const enum AVPixelFormat formats[] = {AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE};
+    //return ff_set_common_formats(ctx, ff_make_format_list(formats));
+
+    GlDrawTextContext *c = ctx->priv;
+    static const enum AVPixelFormat pix_fmts_rgb[] = {
+        AV_PIX_FMT_RGB24,    AV_PIX_FMT_BGR24,
+        AV_PIX_FMT_ARGB,     AV_PIX_FMT_ABGR,
+        AV_PIX_FMT_RGBA,     AV_PIX_FMT_BGRA,
+        AV_PIX_FMT_NONE
+    };
+    static const enum AVPixelFormat pix_fmts_rgba[] = {
+        AV_PIX_FMT_ARGB,     AV_PIX_FMT_ABGR,
+        AV_PIX_FMT_RGBA,     AV_PIX_FMT_BGRA,
+        AV_PIX_FMT_NONE
+    };
+    AVFilterFormats *fmts_list;
+
+    if (c->alphachannel) {
+        c->pix_fmt = GL_RGBA;
+        c->channel_num = 4;
+        fmts_list = ff_make_format_list(pix_fmts_rgba);
+    } else {
+        c->pix_fmt = GL_RGB;
+        c->channel_num = 3;
+        fmts_list = ff_make_format_list(pix_fmts_rgb);
+    }
+    if (!fmts_list) {
+      return AVERROR(ENOMEM);
+    }
+    return ff_set_common_formats(ctx, fmts_list);
 }
 
 static const AVFilterPad gldrawtext_inputs[] = {
