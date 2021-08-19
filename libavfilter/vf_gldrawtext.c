@@ -8,6 +8,8 @@
 #include "drawutils.h"
 #include "internal.h"
 #include "glutil.h"
+#include "lavfutils.h"
+#include "libavutil/pixdesc.h"
 
 // ./ffplay /mnt/d/Archive/Media/TimeCode.mov -vf scale=640x480,gldrawtext=text='太太太太重要了!!!':
 //   fontsize=36:fontcolor=white:fontfile=local_华康金刚黑.ttf:x=100:y=200:borderw=6:bordercolor=red -an
@@ -21,6 +23,12 @@
 // ./ffmpeg -y -i ~/michael/media/d_9.mp4 -filter_complex 
 // "color=c=black@0:s=760x144,format=rgba,gldrawtext=text=AaopglH李二龙:fontfile=mtr.ttf:
 // fontsize=128:fontcolor=red@1:alphachannel=1"
+// -pix_fmt rgba -frames:v 1 ~/michael/tools/nginx/html/tmp/1.png
+
+// set bg
+// ./ffmpeg -y -i ~/michael/media/d_9.mp4 -filter_complex 
+// "color=c=black@0:s=760x144,format=rgba,gldrawtext=text=AaopglH李二龙:fontfile=mtr.ttf:
+// fontsize=128:fontcolor=red@1:alphachannel=1:texture=./libavfilter/oglfilter/resource/lieheng.png:borderw=10:bordercolor=white"
 // -pix_fmt rgba -frames:v 1 ~/michael/tools/nginx/html/tmp/1.png
 
 #if CONFIG_LIBFONTCONFIG
@@ -102,10 +110,18 @@ static const GLchar *v_shader_source =
 
 static const GLchar *f_shader_source =
     "uniform sampler2D tex;\n"
+    "uniform sampler2D text_tex;\n"
     "varying vec2 texCoord;\n"
     "void main() {\n"
     "  vec2 uv = vec2(texCoord.x, 1.0 - texCoord.y);\n"
-    "  gl_FragColor = texture2D(tex, uv);\n"
+    "  vec4 text_c = texture2D(tex, uv);\n"
+    "  vec4 texture_c = texture2D(text_tex, uv);\n"
+    "  if (text_c.r > 0.99 && text_c.g < 0.01 && text_c.b < 0.01)\n"
+    //"  if (uv.x < 0.5)\n"
+    "    gl_FragColor = texture_c;\n"
+    "  else\n"
+    "    gl_FragColor = text_c;\n"
+    //"  gl_FragColor = text_c;\n"
     "}\n";
 
 static const GLchar *f_shader_source_wipe_right = // 向右擦除
@@ -326,6 +342,7 @@ typedef struct
     const AVClass *class;
     GLuint program;
     GLuint frame_tex;
+    GLuint extra_tex;
     GLuint pos_buf;
 
     GLint time;
@@ -383,6 +400,9 @@ typedef struct
     int pix_fmt;
     int channel_num;
 
+    char *texture_filepath;
+    uint8_t *tex_data;
+
 #ifdef GL_TRANSITION_USING_EGL
     EGLDisplay      eglDpy;
     EGLConfig       eglCfg;
@@ -416,6 +436,7 @@ static const AVOption gldrawtext_options[] = {
     {"reload",     "reload text file for each frame",                       OFFSET(reload),     AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGS},
     {"alpha",       "apply alpha while rendering", OFFSET(alpha),      AV_OPT_TYPE_INT, {.i64 = 255}, 0, 255, FLAGS},
     {"alphachannel", "keep alpha channel", OFFSET(alphachannel), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, FLAGS},
+    {"texture",     "set texture",         OFFSET(texture_filepath),       AV_OPT_TYPE_STRING, {.str=NULL},  0, 0, FLAGS},
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(gldrawtext);
@@ -749,7 +770,7 @@ static void vbo_setup(GlDrawTextContext *gs)
     glVertexAttribPointer(loc, 2, GL_FLOAT, GL_FALSE, 0, 0);
 }
 
-static void tex_setup(AVFilterLink *inlink)
+static int tex_setup(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
     GlDrawTextContext *gs = ctx->priv;
@@ -766,6 +787,86 @@ static void tex_setup(AVFilterLink *inlink)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, inlink->w, inlink->h, 0, PIXEL_FORMAT, GL_UNSIGNED_BYTE, NULL);
 
     glUniform1i(glGetUniformLocation(gs->program, "tex"), 0);
+
+    if (gs->texture_filepath) {
+        int ret;
+        AVFrame *tex_frame = av_frame_alloc();
+        if (!tex_frame)
+            return AVERROR(ENOMEM);
+
+        if ((ret = ff_load_image(tex_frame->data, tex_frame->linesize,
+                                &tex_frame->width, &tex_frame->height,
+                                &tex_frame->format, gs->texture_filepath, gs)) < 0)
+        {
+            av_log(ctx, AV_LOG_ERROR, "failed to load texture file: %s\n", gs->texture_filepath);
+            return ret;
+        }
+
+        if (tex_frame->format != AV_PIX_FMT_RGB24 && tex_frame->format != AV_PIX_FMT_RGBA && 
+            tex_frame->format != AV_PIX_FMT_GRAY8) {
+            av_log(ctx, AV_LOG_ERROR, "texture image is not a rgb image: %d(%s)\n", 
+                tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
+            return AVERROR(EINVAL);
+        }
+
+        int width = tex_frame->width;
+        int height = tex_frame->height;
+        int channels;
+        int pix_fmt;
+        switch (tex_frame->format) {
+        case AV_PIX_FMT_RGB24:
+            channels = 3;
+            pix_fmt = GL_RGB;
+            break;
+        case AV_PIX_FMT_RGBA:
+            channels = 4;
+            pix_fmt = GL_RGBA;
+            break;
+        case AV_PIX_FMT_GRAY8:
+            channels = 1;
+            pix_fmt = GL_RED;
+            break;
+        default:
+            av_log(ctx, AV_LOG_ERROR, "unsupported pix format: %d(%s)\n", 
+                tex_frame->format, av_get_pix_fmt_name(tex_frame->format));
+            return AVERROR(EINVAL);
+        }
+        int frame_data_size = width * height * channels;
+        if (!gs->tex_data)
+            gs->tex_data = av_mallocz(frame_data_size);
+        
+        if (tex_frame->linesize[0] == width * channels) {
+            // bunch copy
+            memcpy(gs->tex_data, tex_frame->data[0], tex_frame->linesize[0] * height);
+        }
+        else {
+            // line copy
+            int data_offset = 0;
+            int frame_offset = 0;
+            for (int line=0;line<height;line++) { 
+                memcpy(gs->tex_data, tex_frame->data[0] + frame_offset, width * channels);
+                data_offset += width * channels;
+                frame_offset += tex_frame->linesize[0];
+            }
+        }
+
+        av_frame_free(&tex_frame);
+
+        glGenTextures(1, &gs->extra_tex);
+        glActiveTexture(GL_TEXTURE0 + 1);
+        glBindTexture(GL_TEXTURE_2D, gs->extra_tex);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+        glTexImage2D(GL_TEXTURE_2D, 0, pix_fmt, width, height, 0, pix_fmt, GL_UNSIGNED_BYTE, gs->tex_data);
+
+        glUniform1i(glGetUniformLocation(gs->program, "text_tex"), 1);
+    }
+
+    return 0;
 }
 
 static int build_program(AVFilterContext *ctx, GLuint *program, const char* vs, const char* fs)
@@ -1021,7 +1122,9 @@ static int config_props(AVFilterLink *inlink)
     glUseProgram(gs->program);
     vbo_setup(gs);
     setup_uniforms(inlink);
-    tex_setup(inlink);
+    if (tex_setup(inlink) < 0)
+        return -1;
+
     return 0;
 }
 
@@ -1269,8 +1372,16 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     glPixelStorei(GL_UNPACK_ROW_LENGTH, in->linesize[0] / gs->channel_num);
 
     // render it!!!
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gs->frame_tex);
     glTexImage2D(GL_TEXTURE_2D, 0, gs->pix_fmt, inlink->w, inlink->h, 0, gs->pix_fmt, 
         GL_UNSIGNED_BYTE, in->data[0]);
+    
+    if (gs->texture_filepath) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, gs->extra_tex);
+    }
+
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glReadPixels(0, 0, outlink->w, outlink->h, gs->pix_fmt, GL_UNSIGNED_BYTE, (GLvoid *)out->data[0]);
