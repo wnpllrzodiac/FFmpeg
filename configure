@@ -3654,6 +3654,7 @@ glheart_filter_deps="glnone_filter"
 glcommon_filter_deps="glnone_filter"
 glmask_filter_deps="glnone_filter"
 gldrawtext_filter_deps="glnone_filter libfreetype libfontconfig"
+glcentercrop_deps="glnone_filter"
 
 # examples
 avio_list_dir_deps="avformat avutil"
