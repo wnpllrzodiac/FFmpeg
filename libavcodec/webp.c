@@ -37,6 +37,8 @@
  *
  * @author Josef Zlomek, Pexeso Inc. <josef@pex.com>
  * Animation
+ * https://patchwork.ffmpeg.org/project/ffmpeg/list/?submitter=1040
+ * https://patchwork.ffmpeg.org/project/ffmpeg/patch/20200826084130.15400-1-josef@pex.com/
  *
 
  * Unimplemented:
@@ -45,6 +47,7 @@
 
 #include "libavutil/imgutils.h"
 #include "libavutil/colorspace.h"
+#include "libavutil/opt.h" // for AVOption
 
 #define BITSTREAM_READER_LE
 #include "avcodec.h"
@@ -223,6 +226,8 @@ typedef struct WebPContext {
     int reduced_width;                  /* reduced width for index image, if applicable */
     int nb_huffman_groups;              /* number of huffman groups in the primary image */
     ImageContext image[IMAGE_ROLE_NB];  /* image context for each role */
+
+    int transparent_bg;                 /* force set transparent background */
 } WebPContext;
 
 #define GET_PIXEL(frame, x, y) \
@@ -1979,6 +1984,14 @@ exif_end:
             s->background_argb[2] = g = bytestream2_get_byte(&gb);
             s->background_argb[1] = r = bytestream2_get_byte(&gb);
             s->background_argb[0] = a = bytestream2_get_byte(&gb);
+            s->background_argb[0] = a = 0;
+            //if (s->transparent_bg) {
+            //    s->background_argb[0] = a = 0;
+            //    av_log(avctx, AV_LOG_INFO, "force set transparent background\n");    
+            //}
+            //av_log(avctx, AV_LOG_INFO, 
+            //    "ANIM background color: bgra 0x%02x(%d) 0x%02x(%d) 0x%02x(%d) 0x%02x(%d)\n",
+            //    b,b,g,g,r,r,a,a);
 
             // convert the background color to YUVA
             desc = av_pix_fmt_desc_get(AV_PIX_FMT_YUVA420P);
@@ -2149,6 +2162,7 @@ static int webp_update_thread_context(AVCodecContext *dst, const AVCodecContext 
     wdst->prev_pos_x      = wsrc->pos_x;
     wdst->prev_pos_y      = wsrc->pos_y;
     wdst->await_progress  = wsrc->await_progress + 1;
+    wdst->transparent_bg  = wsrc->transparent_bg;
 
     memcpy(wdst->background_argb,  wsrc->background_argb,  sizeof(wsrc->background_argb));
     memcpy(wdst->background_yuva,  wsrc->background_yuva,  sizeof(wsrc->background_yuva));
@@ -2157,11 +2171,28 @@ static int webp_update_thread_context(AVCodecContext *dst, const AVCodecContext 
 }
 #endif
 
+#define OFFSET(x) offsetof(WebPContext, x)
+#define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
+static const AVOption options[] = {
+    { "trans_bg", "force transparent background", OFFSET(transparent_bg), 
+        AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, VE },
+    { NULL },
+};
+
+static const AVClass webpdec_class = {
+    .class_name = "webp decoder",
+    .item_name  = av_default_item_name,
+    .option     = options,
+    .version    = LIBAVUTIL_VERSION_INT,
+    .category   = AV_CLASS_CATEGORY_DECODER,
+};
+
 AVCodec ff_webp_decoder = {
     .name           = "webp",
     .long_name      = NULL_IF_CONFIG_SMALL("WebP image"),
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_WEBP,
+    //.priv_class     = &webpdec_class,
     .priv_data_size = sizeof(WebPContext),
     .update_thread_context = ONLY_IF_THREADS_ENABLED(webp_update_thread_context),
     .init           = webp_decode_init,

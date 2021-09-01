@@ -76,7 +76,7 @@ static int webp_parse(AVCodecParserContext *s, AVCodecContext *avctx,
                         continue;
                     }
                 }
-            if (ctx->pc.frame_start_found == 0) {
+                if (ctx->pc.frame_start_found == 0) {
                     if ((state >> 32) == MKBETAG('R', 'I', 'F', 'F')) {
                         ctx->fsize = av_bswap32(state);
                         if (ctx->fsize > 15 && ctx->fsize <= UINT32_MAX - 10) {
