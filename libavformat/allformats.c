@@ -454,6 +454,7 @@ extern AVOutputFormat ff_webm_muxer;
 extern AVInputFormat  ff_webm_dash_manifest_demuxer;
 extern AVOutputFormat ff_webm_dash_manifest_muxer;
 extern AVOutputFormat ff_webm_chunk_muxer;
+extern AVInputFormat  ff_webp_demuxer;
 extern AVOutputFormat ff_webp_muxer;
 extern AVInputFormat  ff_webvtt_demuxer;
 extern AVOutputFormat ff_webvtt_muxer;

@@ -228,6 +228,7 @@ typedef struct WebPContext {
     ImageContext image[IMAGE_ROLE_NB];  /* image context for each role */
 
     int transparent_bg;                 /* force set transparent background */
+    int show_pts;                       /* show frame timestamp for debug */
 } WebPContext;
 
 #define GET_PIXEL(frame, x, y) \
@@ -2108,6 +2109,8 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
         }
 
         p->pts = avpkt->pts;
+        if (s->show_pts)
+            av_log(NULL, AV_LOG_INFO, "key: %d, pts: %"PRId64"\n", key_frame, p->pts);
     }
 
     ret = avpkt->size;
@@ -2176,15 +2179,16 @@ static int webp_update_thread_context(AVCodecContext *dst, const AVCodecContext 
 static const AVOption options[] = {
     { "trans_bg", "force transparent background", OFFSET(transparent_bg), 
         AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, VE },
+    { "show_pts", "show frame pts", OFFSET(show_pts), 
+        AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, VE },
     { NULL },
 };
 
-static const AVClass webpdec_class = {
+static const AVClass webp_class = {
     .class_name = "webp decoder",
     .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
-    .category   = AV_CLASS_CATEGORY_DECODER,
 };
 
 AVCodec ff_webp_decoder = {
@@ -2192,7 +2196,7 @@ AVCodec ff_webp_decoder = {
     .long_name      = NULL_IF_CONFIG_SMALL("WebP image"),
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_WEBP,
-    //.priv_class     = &webpdec_class,
+    //.priv_class     = &webp_class,
     .priv_data_size = sizeof(WebPContext),
     .update_thread_context = ONLY_IF_THREADS_ENABLED(webp_update_thread_context),
     .init           = webp_decode_init,
