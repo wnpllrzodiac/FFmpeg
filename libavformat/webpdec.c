@@ -214,6 +214,7 @@ static int webp_read_header(AVFormatContext *s)
     int width         = 0;
     int height        = 0;
     int is_frame      = 0;
+    int64_t nb_frames = 0, duration = 0;
 
     wdc->delay = wdc->default_delay;
     wdc->num_loop = 1;
@@ -279,8 +280,10 @@ static int webp_read_header(AVFormatContext *s)
                 avio_skip(pb, 6);
                 width  = avio_rl24(pb) + 1;
                 height = avio_rl24(pb) + 1;
-                is_frame = 1;
-                ret = avio_skip(pb, chunk_size - 12);
+                duration += avio_rl24(pb);   // duration in 1 millisecond units
+                //is_frame = 1;
+                nb_frames++;
+                ret = avio_skip(pb, chunk_size - 12 - 3/*duration*/);
             } else
                 ret = avio_skip(pb, chunk_size);
             break;
@@ -307,6 +310,8 @@ static int webp_read_header(AVFormatContext *s)
     st->codecpar->width      = canvas_width;
     st->codecpar->height     = canvas_height;
     st->start_time           = 0;
+    st->duration             = duration;
+    st->nb_frames            = nb_frames;
 
     // jump to start because WebP decoder needs header data too
     if ((ret = avio_seek(pb, wdc->file_start, SEEK_SET)) < 0)
