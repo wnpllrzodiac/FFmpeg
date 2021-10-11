@@ -35,6 +35,7 @@
 #include "libavcodec/put_bits.h"
 #include "libavcodec/aacenctab.h"
 #include "hevc.h"
+#include "libavutil/aes.h"
 
 static const AVCodecTag flv_video_codec_ids[] = {
     { AV_CODEC_ID_FLV1,     FLV_CODECID_H263 },
@@ -119,6 +120,7 @@ typedef struct FLVContext {
     AVCodecParameters *data_par;
 
     int flags;
+    int tysx_encryption;
 } FLVContext;
 
 typedef struct FLVStreamContext {
@@ -538,7 +540,11 @@ static void flv_write_codec_header(AVFormatContext* s, AVCodecParameters* par, i
             avio_w8(pb, par->codec_tag | FLV_FRAME_KEY); // flags
             avio_w8(pb, 0); // AVC sequence header
             avio_wb24(pb, 0); // composition time
-            ff_isom_write_avcc(pb, par->extradata, par->extradata_size);
+            if (par->codec_id == AV_CODEC_ID_HEVC) {
+                ff_isom_write_hvcc(pb, par->extradata, par->extradata_size, 0);
+            } else {
+                ff_isom_write_avcc(pb, par->extradata, par->extradata_size);
+            }
         }
         data_size = avio_tell(pb) - pos;
         avio_seek(pb, -data_size - 10, SEEK_CUR);
@@ -887,6 +893,7 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
     uint8_t *data = NULL;
     int flags = -1, flags_size, ret = 0;
     int64_t cur_offset = avio_tell(pb);
+    int nalu_type;
 
     if (par->codec_type == AVMEDIA_TYPE_AUDIO && !pkt->size) {
         av_log(s, AV_LOG_WARNING, "Empty audio Packet\n");
@@ -911,6 +918,48 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
                 return ret;
             memcpy(par->extradata, side, side_size);
             flv_write_codec_header(s, par, pkt->dts);
+        }
+    }
+
+    // tylive
+    if (flv->tysx_encryption) {
+        if (par->codec_id == AV_CODEC_ID_H264 && pkt->flags & AV_PKT_FLAG_KEY) {
+            //av_log(s, AV_LOG_WARNING, "tysx_encryption nal %02x %02x %02x %02x %02x %02x\n", 
+            //    pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3], pkt->data[4], pkt->data[5]);
+            
+            nalu_type = pkt->data[4] & 0x1F;
+            //av_log(s, AV_LOG_WARNING, "tysx_encryption nalu type %d\n", nalu_type);
+            if (nalu_type == 5/*IDR*/) {
+                if (pkt->size >= 5 + 64) {
+                    struct AVAES *ae;
+                    uint8_t iv[16+1] = "H&*y9_#ghoGy)a*E";
+                    
+                    ae = av_aes_alloc();
+                    if (!ae)
+                        return AVERROR(EINVAL);
+                    
+                    if (av_aes_init(ae, (const uint8_t*)"tu*jd&8jk6-54Md@", 128, 0) < 0)
+                        return AVERROR(EINVAL);
+
+                    av_aes_crypt(ae, pkt->data + 5, pkt->data + 5, 4, iv, 0);
+                    
+                    av_free(ae);
+                    ae = NULL;
+                }
+                
+                /*
+                // method 0
+                for (int i=5;i<pkt->size;i++) { // skip nalu size and header
+                    uint8_t orig = pkt->data[i];
+                    pkt->data[i] = orig ^ 0x43;
+                    
+                    //av_log(s, AV_LOG_WARNING, "tysx_encryption %02x ->%02x\n", orig, pkt->data[i]);
+                    
+                    if (i > 64 + 5)
+                        break;
+                }
+                */
+            }
         }
     }
 
@@ -1107,6 +1156,7 @@ static const AVOption options[] = {
     { "no_metadata", "disable metadata for FLV", 0, AV_OPT_TYPE_CONST, {.i64 = FLV_NO_METADATA}, INT_MIN, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
     { "no_duration_filesize", "disable duration and filesize zero value metadata for FLV", 0, AV_OPT_TYPE_CONST, {.i64 = FLV_NO_DURATION_FILESIZE}, INT_MIN, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
     { "add_keyframe_index", "Add keyframe index metadata", 0, AV_OPT_TYPE_CONST, {.i64 = FLV_ADD_KEYFRAME_INDEX}, INT_MIN, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
+    { "flv_tylive", "enable tysx flv encryption", offsetof(FLVContext, tysx_encryption), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
     { NULL },
 };
 
