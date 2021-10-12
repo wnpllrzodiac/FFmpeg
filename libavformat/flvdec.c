@@ -1320,13 +1320,15 @@ retry_duration:
     
     if (flv->tysx_decryption) {
         if (st->codecpar->codec_id == AV_CODEC_ID_H264 && pkt->flags & AV_PKT_FLAG_KEY) {
+            const int skip_nalu_size = 2;
             //av_log(s, AV_LOG_WARNING, "tysx_decryption nal %02x %02x %02x %02x %02x %02x\n", 
             //    pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3], pkt->data[4], pkt->data[5]);
             
             nalu_type = pkt->data[4] & 0x1F;
             //av_log(s, AV_LOG_WARNING, "tysx_decryption nalu type %d\n", nalu_type);
-            if (nalu_type == 5/*IDR*/) {
-                if (pkt->size >= 5 + 64) {
+            if (nalu_type == 5/*IDR*/ && pkt->size >= 5 + 64 + skip_nalu_size) {
+                int nal_reference_bit = (pkt->data[4] >> 5) & 0x03;
+                if (nal_reference_bit == 0x2) {
                     struct AVAES *ad;
                     uint8_t iv[16+1] = "H&*y9_#ghoGy)a*E";
                     
@@ -1337,7 +1339,7 @@ retry_duration:
                     if (av_aes_init(ad, (const uint8_t*)"tu*jd&8jk6-54Md@", 128, 1) < 0)
                         return AVERROR(EINVAL);
 
-                    av_aes_crypt(ad, pkt->data + 5, pkt->data + 5, 4, iv, 1);
+                    av_aes_crypt(ad, pkt->data + 5 + skip_nalu_size, pkt->data + 5 + skip_nalu_size, 4, iv, 1);
                     
                     av_free(ad);
                     ad = NULL;

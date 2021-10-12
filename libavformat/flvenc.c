@@ -924,13 +924,15 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
     // tylive
     if (flv->tysx_encryption) {
         if (par->codec_id == AV_CODEC_ID_H264 && pkt->flags & AV_PKT_FLAG_KEY) {
-            //av_log(s, AV_LOG_WARNING, "tysx_encryption nal %02x %02x %02x %02x %02x %02x\n", 
-            //    pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3], pkt->data[4], pkt->data[5]);
-            
+            const int skip_nalu_size = 2;
             nalu_type = pkt->data[4] & 0x1F;
-            //av_log(s, AV_LOG_WARNING, "tysx_encryption nalu type %d\n", nalu_type);
-            if (nalu_type == 5/*IDR*/) {
-                if (pkt->size >= 5 + 64) {
+            //av_log(s, AV_LOG_WARNING, "tysx_encryption nal_size %d, type %d, data %02x %02x %02x %02x %02x %02x\n", 
+            //    size, nalu_type, pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3], pkt->data[4], pkt->data[5]);
+            
+            if (nalu_type == 5/*IDR*/ ) { //|| nalu_type == 6/*SEI*/) {
+                if (pkt->size >= 5 + 64 + skip_nalu_size) {
+                    pkt->data[4] = 0x45; // mark it
+                    
                     struct AVAES *ae;
                     uint8_t iv[16+1] = "H&*y9_#ghoGy)a*E";
                     
@@ -941,7 +943,7 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
                     if (av_aes_init(ae, (const uint8_t*)"tu*jd&8jk6-54Md@", 128, 0) < 0)
                         return AVERROR(EINVAL);
 
-                    av_aes_crypt(ae, pkt->data + 5, pkt->data + 5, 4, iv, 0);
+                    av_aes_crypt(ae, pkt->data + 5 + skip_nalu_size, pkt->data + 5 + skip_nalu_size, 4, iv, 0);
                     
                     av_free(ae);
                     ae = NULL;
