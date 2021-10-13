@@ -121,6 +121,7 @@ typedef struct FLVContext {
 
     int flags;
     int tysx_encryption;
+    char *tylive_key;
 } FLVContext;
 
 typedef struct FLVStreamContext {
@@ -923,24 +924,28 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
 
     // tylive
     if (flv->tysx_encryption) {
-        if (par->codec_id == AV_CODEC_ID_H264 && pkt->flags & AV_PKT_FLAG_KEY) {
+        if (par->codec_id == AV_CODEC_ID_H264/* && pkt->flags & AV_PKT_FLAG_KEY*/) {
             const int skip_nalu_size = 2;
             nalu_type = pkt->data[4] & 0x1F;
             //av_log(s, AV_LOG_WARNING, "tysx_encryption nal_size %d, type %d, data %02x %02x %02x %02x %02x %02x\n", 
             //    size, nalu_type, pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3], pkt->data[4], pkt->data[5]);
             
-            if (nalu_type == 5/*IDR*/ ) { //|| nalu_type == 6/*SEI*/) {
+            if (nalu_type >= 1 && nalu_type <= 5/*IDR*/ ) {
                 if (pkt->size >= 5 + 64 + skip_nalu_size) {
-                    pkt->data[4] = 0x45; // mark it
+                    //pkt->data[4] &= 0x6F; // mark it
                     
                     struct AVAES *ae;
+                    uint8_t key[16+1] = "tu*jd&8jk6-54Md@";
                     uint8_t iv[16+1] = "H&*y9_#ghoGy)a*E";
+                    
+                    if (flv->tylive_key)
+                        memcpy(key, flv->tylive_key, 16);
                     
                     ae = av_aes_alloc();
                     if (!ae)
                         return AVERROR(EINVAL);
                     
-                    if (av_aes_init(ae, (const uint8_t*)"tu*jd&8jk6-54Md@", 128, 0) < 0)
+                    if (av_aes_init(ae, (const uint8_t*)key, 128, 0) < 0)
                         return AVERROR(EINVAL);
 
                     av_aes_crypt(ae, pkt->data + 5 + skip_nalu_size, pkt->data + 5 + skip_nalu_size, 4, iv, 0);
@@ -961,6 +966,17 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
                         break;
                 }
                 */
+            }
+        }
+        else if (par->codec_id == AV_CODEC_ID_AAC) {
+            //av_log(s, AV_LOG_WARNING, "tysx_encryption aac_size %d, data %02x %02x %02x %02x %02x %02x\n", 
+            //    size, pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3], pkt->data[4], pkt->data[5]);
+            // aac_size 36, data 21 1b 53 40 7d cb
+            if (pkt->size >= 8) { // 2 bytes latm is already removed
+                int i;
+                for (i=0;i<8;i++) {
+                    *(pkt->data + i) = *(pkt->data + i) ^ 0x45;
+                }
             }
         }
     }
@@ -1159,6 +1175,7 @@ static const AVOption options[] = {
     { "no_duration_filesize", "disable duration and filesize zero value metadata for FLV", 0, AV_OPT_TYPE_CONST, {.i64 = FLV_NO_DURATION_FILESIZE}, INT_MIN, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
     { "add_keyframe_index", "Add keyframe index metadata", 0, AV_OPT_TYPE_CONST, {.i64 = FLV_ADD_KEYFRAME_INDEX}, INT_MIN, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
     { "flv_tylive", "enable tysx flv encryption", offsetof(FLVContext, tysx_encryption), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
+    { "tylive_key", "aes decryption key", offsetof(FLVContext, tylive_key), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, AV_OPT_FLAG_ENCODING_PARAM, "flvflags" },
     { NULL },
 };
 
