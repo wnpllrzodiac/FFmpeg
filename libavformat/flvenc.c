@@ -972,7 +972,7 @@ static int flv_write_packet(AVFormatContext *s, AVPacket *pkt)
             //av_log(s, AV_LOG_WARNING, "tysx_encryption aac_size %d, data %02x %02x %02x %02x %02x %02x\n", 
             //    size, pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3], pkt->data[4], pkt->data[5]);
             // aac_size 36, data 21 1b 53 40 7d cb
-            if (pkt->size >= 8) { // 2 bytes latm is already removed
+            if (pkt->size >= 64) { // 2 bytes latm is already removed
                 int i;
                 for (i=0;i<8;i++) {
                     *(pkt->data + i) = *(pkt->data + i) ^ 0x45;

@@ -1370,7 +1370,7 @@ retry_duration:
             
             // af 01 21 11 | 45 00 14 50 from publisher
             // 21 11 45 00 14 50 from avpacket
-            if (pkt->size >= 8) { // 2 bytes latm is already removed
+            if (pkt->size >= 64) { // 2 bytes latm is already removed, consider small pkt change will influnce metadata fetch, 64 bytes may be a good choice
                 int i;
                 for (i=0;i<8;i++) {
                     *(pkt->data + i) = *(pkt->data + i) ^ 0x45;
