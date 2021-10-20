@@ -1777,7 +1777,6 @@ static av_cold int webp_decode_init(AVCodecContext *avctx)
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(AV_PIX_FMT_YUVA420P);
 
     s->avctx = avctx;
-    av_log(NULL, "webp_decode_init: %p\n", s->v.thread_data);
     s->canvas_frame.f = av_frame_alloc();
     s->frame = av_frame_alloc();
     if (!s->canvas_frame.f || !s->frame) {
