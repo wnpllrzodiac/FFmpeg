@@ -1777,6 +1777,7 @@ static av_cold int webp_decode_init(AVCodecContext *avctx)
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(AV_PIX_FMT_YUVA420P);
 
     s->avctx = avctx;
+    av_log(NULL, "webp_decode_init: %p\n", s->v.thread_data);
     s->canvas_frame.f = av_frame_alloc();
     s->frame = av_frame_alloc();
     if (!s->canvas_frame.f || !s->frame) {
@@ -1985,14 +1986,14 @@ exif_end:
             s->background_argb[2] = g = bytestream2_get_byte(&gb);
             s->background_argb[1] = r = bytestream2_get_byte(&gb);
             s->background_argb[0] = a = bytestream2_get_byte(&gb);
-            s->background_argb[0] = a = 0;
-            //if (s->transparent_bg) {
-            //    s->background_argb[0] = a = 0;
-            //    av_log(avctx, AV_LOG_INFO, "force set transparent background\n");    
-            //}
-            //av_log(avctx, AV_LOG_INFO, 
-            //    "ANIM background color: bgra 0x%02x(%d) 0x%02x(%d) 0x%02x(%d) 0x%02x(%d)\n",
-            //    b,b,g,g,r,r,a,a);
+            //s->background_argb[0] = a = 0;
+            if (s->transparent_bg) {
+                s->background_argb[0] = a = 0;
+                av_log(avctx, AV_LOG_INFO, "force set transparent background\n");    
+            }
+            av_log(avctx, AV_LOG_INFO, 
+                "ANIM background color: bgra 0x%02x(%d) 0x%02x(%d) 0x%02x(%d) 0x%02x(%d)\n",
+                b,b,g,g,r,r,a,a);
 
             // convert the background color to YUVA
             desc = av_pix_fmt_desc_get(AV_PIX_FMT_YUVA420P);
@@ -2196,7 +2197,7 @@ AVCodec ff_webp_decoder = {
     .long_name      = NULL_IF_CONFIG_SMALL("WebP image"),
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_WEBP,
-    //.priv_class     = &webp_class,
+    .priv_class     = &webp_class,
     .priv_data_size = sizeof(WebPContext),
     .update_thread_context = ONLY_IF_THREADS_ENABLED(webp_update_thread_context),
     .init           = webp_decode_init,
