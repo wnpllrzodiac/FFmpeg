@@ -35,12 +35,19 @@
  * Exif metadata
  * ICC profile
  *
+ * @author Josef Zlomek, Pexeso Inc. <josef@pex.com>
+ * Animation
+ * https://patchwork.ffmpeg.org/project/ffmpeg/list/?submitter=1040
+ * https://patchwork.ffmpeg.org/project/ffmpeg/patch/20200826084130.15400-1-josef@pex.com/
+ *
+
  * Unimplemented:
- *   - Animation
  *   - XMP metadata
  */
 
 #include "libavutil/imgutils.h"
+#include "libavutil/colorspace.h"
+#include "libavutil/opt.h" // for AVOption
 
 #define BITSTREAM_READER_LE
 #include "avcodec.h"
@@ -50,12 +57,7 @@
 #include "internal.h"
 #include "thread.h"
 #include "vp8.h"
-
-#define VP8X_FLAG_ANIMATION             0x02
-#define VP8X_FLAG_XMP_METADATA          0x04
-#define VP8X_FLAG_EXIF_METADATA         0x08
-#define VP8X_FLAG_ALPHA                 0x10
-#define VP8X_FLAG_ICC                   0x20
+#include "webp.h"
 
 #define MAX_PALETTE_SIZE                256
 #define MAX_CACHE_BITS                  11
@@ -188,6 +190,8 @@ typedef struct ImageContext {
 typedef struct WebPContext {
     VP8Context v;                       /* VP8 Context used for lossy decoding */
     GetBitContext gb;                   /* bitstream reader for main image chunk */
+    ThreadFrame canvas_frame;           /* ThreadFrame for canvas */
+    AVFrame *frame;                     /* AVFrame for decoded frame */
     AVFrame *alpha_frame;               /* AVFrame for alpha data decompressed from VP8L */
     AVCodecContext *avctx;              /* parent AVCodecContext */
     int initialized;                    /* set once the VP8 context is initialized */
@@ -198,15 +202,33 @@ typedef struct WebPContext {
     int alpha_data_size;                /* alpha chunk data size */
     int has_exif;                       /* set after an EXIF chunk has been processed */
     int has_iccp;                       /* set after an ICCP chunk has been processed */
-    int width;                          /* image width */
-    int height;                         /* image height */
-    int lossless;                       /* indicates lossless or lossy */
+    int vp8x_flags;                     /* global flags from VP8X chunk */
+    int canvas_width;                   /* canvas width */
+    int canvas_height;                  /* canvas height */
+    int anmf_flags;                     /* frame flags from ANMF chunk */
+    int width;                          /* frame width */
+    int height;                         /* frame height */
+    int pos_x;                          /* frame position X */
+    int pos_y;                          /* frame position Y */
+    int prev_anmf_flags;                /* previous frame flags from ANMF chunk */
+    int prev_width;                     /* previous frame width */
+    int prev_height;                    /* previous frame height */
+    int prev_pos_x;                     /* previous frame position X */
+    int prev_pos_y;                     /* previous frame position Y */
+    int await_progress;                 /* value of progress to wait for */
+    uint8_t background_argb[4];         /* background color in ARGB format */
+    uint8_t background_yuva[4];         /* background color in YUVA format */
+    const uint8_t *background_data[4];  /* "planes" for background color in YUVA format */
+    uint8_t transparent_yuva[4];        /* transparent black in YUVA format */
 
     int nb_transforms;                  /* number of transforms */
     enum TransformType transforms[4];   /* transformations used in the image, in order */
     int reduced_width;                  /* reduced width for index image, if applicable */
     int nb_huffman_groups;              /* number of huffman groups in the primary image */
     ImageContext image[IMAGE_ROLE_NB];  /* image context for each role */
+
+    int transparent_bg;                 /* force set transparent background */
+    int show_pts;                       /* show frame timestamp for debug */
 } WebPContext;
 
 #define GET_PIXEL(frame, x, y) \
@@ -605,8 +627,7 @@ static int decode_entropy_coded_image(WebPContext *s, enum ImageRole role,
     img->frame->height = h;
 
     if (role == IMAGE_ROLE_ARGB && !img->is_alpha_primary) {
-        ThreadFrame pt = { .f = img->frame };
-        ret = ff_thread_get_buffer(s->avctx, &pt, 0);
+        ret = ff_get_buffer(s->avctx, img->frame, 0);
     } else
         ret = av_frame_get_buffer(img->frame, 1);
     if (ret < 0)
@@ -1100,7 +1121,7 @@ static int apply_color_indexing_transform(WebPContext *s)
     return 0;
 }
 
-static void update_canvas_size(AVCodecContext *avctx, int w, int h)
+static void update_frame_size(AVCodecContext *avctx, int w, int h)
 {
     WebPContext *s = avctx->priv_data;
     if (s->width && s->width != w) {
@@ -1123,7 +1144,6 @@ static int vp8_lossless_decode_frame(AVCodecContext *avctx, AVFrame *p,
     int w, h, ret, i, used;
 
     if (!is_alpha_chunk) {
-        s->lossless = 1;
         avctx->pix_fmt = AV_PIX_FMT_ARGB;
     }
 
@@ -1140,7 +1160,7 @@ static int vp8_lossless_decode_frame(AVCodecContext *avctx, AVFrame *p,
         w = get_bits(&s->gb, 14) + 1;
         h = get_bits(&s->gb, 14) + 1;
 
-        update_canvas_size(avctx, w, h);
+        update_frame_size(avctx, w, h);
 
         ret = ff_set_dimensions(avctx, s->width, s->height);
         if (ret < 0)
@@ -1338,7 +1358,6 @@ static int vp8_lossy_decode_frame(AVCodecContext *avctx, AVFrame *p,
         s->v.actually_webp = 1;
     }
     avctx->pix_fmt = s->has_alpha ? AV_PIX_FMT_YUVA420P : AV_PIX_FMT_YUV420P;
-    s->lossless = 0;
 
     if (data_size > INT_MAX) {
         av_log(avctx, AV_LOG_ERROR, "unsupported chunk size\n");
@@ -1356,7 +1375,7 @@ static int vp8_lossy_decode_frame(AVCodecContext *avctx, AVFrame *p,
     if (!*got_frame)
         return AVERROR_INVALIDDATA;
 
-    update_canvas_size(avctx, avctx->width, avctx->height);
+    update_frame_size(avctx, avctx->width, avctx->height);
 
     if (s->has_alpha) {
         ret = vp8_lossy_decode_alpha(avctx, p, s->alpha_data,
@@ -1367,41 +1386,427 @@ static int vp8_lossy_decode_frame(AVCodecContext *avctx, AVFrame *p,
     return ret;
 }
 
-static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
-                             AVPacket *avpkt)
+static int init_canvas_frame(WebPContext *s, int format, int key_frame)
 {
-    AVFrame * const p = data;
+    AVFrame *canvas = s->canvas_frame.f;
+    int height;
+    int ret;
+    // canvas is needed only for animation
+    if (!(s->vp8x_flags & VP8X_FLAG_ANIMATION))
+        return 0;
+
+    // avoid init for non-key frames whose format and size did not change
+    if (!key_frame &&
+        canvas->data[0] &&
+        canvas->format == format &&
+        canvas->width  == s->canvas_width &&
+        canvas->height == s->canvas_height)
+        return 0;
+
+    s->avctx->pix_fmt = format;
+    canvas->format    = format;
+    canvas->width     = s->canvas_width;
+    canvas->height    = s->canvas_height;
+
+    // VP8 decoder changed the width and height in AVCodecContext.
+    // Change it back to the canvas size.
+    ret = ff_set_dimensions(s->avctx, s->canvas_width, s->canvas_height);
+    if (ret < 0)
+        return ret;
+
+    ff_thread_release_buffer(s->avctx, &s->canvas_frame);
+    ret = ff_thread_get_buffer(s->avctx, &s->canvas_frame, AV_GET_BUFFER_FLAG_REF);
+    if (ret < 0)
+        return ret;
+
+    if (canvas->format == AV_PIX_FMT_ARGB) {
+        height = canvas->height;
+        memset(canvas->data[0], 0, height * canvas->linesize[0]);
+    } else /* if (canvas->format == AV_PIX_FMT_YUVA420P) */ {
+        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(canvas->format);
+        for (int comp = 0; comp < desc->nb_components; comp++) {
+            int plane = desc->comp[comp].plane;
+
+            if (comp == 1 || comp == 2)
+                height = AV_CEIL_RSHIFT(canvas->height, desc->log2_chroma_h);
+            else
+                height = FFALIGN(canvas->height, 1 << desc->log2_chroma_h);
+
+            memset(canvas->data[plane], s->transparent_yuva[plane],
+                   height * canvas->linesize[plane]);
+        }
+    }
+
+    return 0;
+}
+
+    /*
+     * Blend src1 (foreground) and src2 (background) into dest, in ARGB format.
+     * width, height are the dimensions of src1
+     * pos_x, pos_y is the position in src2 and in dest
+     */
+static void blend_alpha_argb(uint8_t *dest_data[4], int dest_linesize[4],
+                             const uint8_t *src1_data[4], int src1_linesize[4],
+                             const uint8_t *src2_data[4], int src2_linesize[4],
+                             int src2_step[4],
+                             int width, int height, int pos_x, int pos_y)
+{
+    for (int y = 0; y < height; y++) {
+        const uint8_t *src1 = src1_data[0] + y * src1_linesize[0];
+        const uint8_t *src2 = src2_data[0] + (y + pos_y) * src2_linesize[0] + pos_x * src2_step[0];
+        uint8_t       *dest = dest_data[0] + (y + pos_y) * dest_linesize[0] + pos_x * sizeof(uint32_t);
+        for (int x = 0; x < width; x++) {
+            int src1_alpha = src1[0];
+            int src2_alpha = src2[0];
+
+            if (src1_alpha == 255) {
+                memcpy(dest, src1, sizeof(uint32_t));
+            } else if (src1_alpha + src2_alpha == 0) {
+                memset(dest, 0, sizeof(uint32_t));
+            } else {
+                int tmp_alpha = src2_alpha - ROUNDED_DIV(src1_alpha * src2_alpha, 255);
+                int blend_alpha = src1_alpha + tmp_alpha;
+
+                dest[0] = blend_alpha;
+                dest[1] = ROUNDED_DIV(src1[1] * src1_alpha + src2[1] * tmp_alpha, blend_alpha);
+                dest[2] = ROUNDED_DIV(src1[2] * src1_alpha + src2[2] * tmp_alpha, blend_alpha);
+                dest[3] = ROUNDED_DIV(src1[3] * src1_alpha + src2[3] * tmp_alpha, blend_alpha);
+            }
+            src1 += sizeof(uint32_t);
+            src2 += src2_step[0];
+            dest += sizeof(uint32_t);
+        }
+    }
+}
+
+/*
+ * Blend src1 (foreground) and src2 (background) into dest, in YUVA format.
+ * width, height are the dimensions of src1
+ * pos_x, pos_y is the position in src2 and in dest
+ */
+static void blend_alpha_yuva(WebPContext *s,
+                             uint8_t *dest_data[4], int dest_linesize[4],
+                             const uint8_t *src1_data[4], int src1_linesize[4],
+                             int src1_format,
+                             const uint8_t *src2_data[4], int src2_linesize[4],
+                             int src2_step[4],
+                             int width, int height, int pos_x, int pos_y)
+{
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(src1_format);
+
+    int plane_y = desc->comp[0].plane;
+    int plane_u = desc->comp[1].plane;
+    int plane_v = desc->comp[2].plane;
+    int plane_a = desc->comp[3].plane;
+
+    // blend U & V planes first, because the later step may modify alpha plane
+    int w  = AV_CEIL_RSHIFT(width,  desc->log2_chroma_w);
+    int h  = AV_CEIL_RSHIFT(height, desc->log2_chroma_h);
+    int px = AV_CEIL_RSHIFT(pos_x,  desc->log2_chroma_w);
+    int py = AV_CEIL_RSHIFT(pos_y,  desc->log2_chroma_h);
+    int tile_w = 1 << desc->log2_chroma_w;
+    int tile_h = 1 << desc->log2_chroma_h;
+
+    for (int y = 0; y < h; y++) {
+        const uint8_t *src1_u = src1_data[plane_u] + y * src1_linesize[plane_u];
+        const uint8_t *src1_v = src1_data[plane_v] + y * src1_linesize[plane_v];
+        const uint8_t *src2_u = src2_data[plane_u] + (y + py) * src2_linesize[plane_u] + px * src2_step[plane_u];
+        const uint8_t *src2_v = src2_data[plane_v] + (y + py) * src2_linesize[plane_v] + px * src2_step[plane_v];
+        uint8_t       *dest_u = dest_data[plane_u] + (y + py) * dest_linesize[plane_u] + px;
+        uint8_t       *dest_v = dest_data[plane_v] + (y + py) * dest_linesize[plane_v] + px;
+        for (int x = 0; x < w; x++) {
+            // calculate the average alpha of the tile
+            int src1_alpha = 0;
+            int src2_alpha = 0;
+            for (int yy = 0; yy < tile_h; yy++) {
+                for (int xx = 0; xx < tile_w; xx++) {
+                    src1_alpha += src1_data[plane_a][(y * tile_h + yy) * src1_linesize[plane_a] +
+                                                     (x * tile_w + xx)];
+                    src2_alpha += src2_data[plane_a][((y + py) * tile_h + yy) * src2_linesize[plane_a] +
+                                                     ((x + px) * tile_w + xx) * src2_step[plane_a]];
+                }
+            }
+            src1_alpha = AV_CEIL_RSHIFT(src1_alpha, desc->log2_chroma_w + desc->log2_chroma_h);
+            src2_alpha = AV_CEIL_RSHIFT(src2_alpha, desc->log2_chroma_w + desc->log2_chroma_h);
+
+            if (src1_alpha == 255) {
+                *dest_u = *src1_u;
+                *dest_v = *src1_v;
+            } else if (src1_alpha + src2_alpha == 0) {
+                *dest_u = s->transparent_yuva[plane_u];
+                *dest_v = s->transparent_yuva[plane_v];
+            } else {
+                int tmp_alpha = src2_alpha - ROUNDED_DIV(src1_alpha * src2_alpha, 255);
+                int blend_alpha = src1_alpha + tmp_alpha;
+                *dest_u = ROUNDED_DIV(*src1_u * src1_alpha + *src2_u * tmp_alpha, blend_alpha);
+                *dest_v = ROUNDED_DIV(*src1_v * src1_alpha + *src2_v * tmp_alpha, blend_alpha);
+            }
+            src1_u++;
+            src1_v++;
+            src2_u += src2_step[plane_u];
+            src2_v += src2_step[plane_v];
+            dest_u++;
+            dest_v++;
+        }
+    }
+
+    // blend Y & A planes
+    for (int y = 0; y < height; y++) {
+        const uint8_t *src1_y = src1_data[plane_y] + y * src1_linesize[plane_y];
+        const uint8_t *src1_a = src1_data[plane_a] + y * src1_linesize[plane_a];
+        const uint8_t *src2_y = src2_data[plane_y] + (y + pos_y) * src2_linesize[plane_y] + pos_x * src2_step[plane_y];
+        const uint8_t *src2_a = src2_data[plane_a] + (y + pos_y) * src2_linesize[plane_a] + pos_x * src2_step[plane_a];
+        uint8_t       *dest_y = dest_data[plane_y] + (y + pos_y) * dest_linesize[plane_y] + pos_x;
+        uint8_t       *dest_a = dest_data[plane_a] + (y + pos_y) * dest_linesize[plane_a] + pos_x;
+        for (int x = 0; x < width; x++) {
+            int src1_alpha = *src1_a;
+            int src2_alpha = *src2_a;
+
+            if (src1_alpha == 255) {
+                *dest_y = *src1_y;
+                *dest_a = 255;
+            } else if (src1_alpha + src2_alpha == 0) {
+                *dest_y = s->transparent_yuva[plane_y];
+                *dest_a = 0;
+            } else {
+                int tmp_alpha = src2_alpha - ROUNDED_DIV(src1_alpha * src2_alpha, 255);
+                int blend_alpha = src1_alpha + tmp_alpha;
+                *dest_y = ROUNDED_DIV(*src1_y * src1_alpha + *src2_y * tmp_alpha, blend_alpha);
+                *dest_a = blend_alpha;
+            }
+            src1_y++;
+            src1_a++;
+            src2_y += src2_step[plane_y];
+            src2_a += src2_step[plane_a];
+            dest_y++;
+            dest_a++;
+        }
+    }
+}
+
+static int blend_frame_into_canvas(WebPContext *s)
+{
+    AVFrame *canvas = s->canvas_frame.f;
+    AVFrame *frame  = s->frame;
+    int ret;
+    int width, height;
+    int pos_x, pos_y;
+
+    ret = av_frame_copy_props(canvas, frame);
+    if (ret < 0)
+        return ret;
+
+    if ((s->anmf_flags & ANMF_BLENDING_METHOD) == ANMF_BLENDING_METHOD_OVERWRITE
+        || frame->format == AV_PIX_FMT_YUV420P) {
+        // do not blend, overwrite
+
+        if (canvas->format == AV_PIX_FMT_ARGB) {
+            width  = s->width;
+            height = s->height;
+            pos_x  = s->pos_x;
+            pos_y  = s->pos_y;
+
+            for (int y = 0; y < height; y++) {
+                const uint32_t *src = (uint32_t *) (frame->data[0] + y * frame->linesize[0]);
+                uint32_t *dst = (uint32_t *) (canvas->data[0] + (y + pos_y) * canvas->linesize[0]) + pos_x;
+                memcpy(dst, src, width * sizeof(uint32_t));
+            }
+        } else /* if (canvas->format == AV_PIX_FMT_YUVA420P) */ {
+            const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(frame->format);
+            int plane;
+
+            for (int comp = 0; comp < desc->nb_components; comp++) {
+                plane  = desc->comp[comp].plane;
+                width  = s->width;
+                height = s->height;
+                pos_x  = s->pos_x;
+                pos_y  = s->pos_y;
+                if (comp == 1 || comp == 2) {
+                    width  = AV_CEIL_RSHIFT(width,  desc->log2_chroma_w);
+                    height = AV_CEIL_RSHIFT(height, desc->log2_chroma_h);
+                    pos_x  = AV_CEIL_RSHIFT(pos_x,  desc->log2_chroma_w);
+                    pos_y  = AV_CEIL_RSHIFT(pos_y,  desc->log2_chroma_h);
+                }
+
+                for (int y = 0; y < height; y++) {
+                    const uint8_t *src = frame->data[plane] + y * frame->linesize[plane];
+                    uint8_t *dst = canvas->data[plane] + (y + pos_y) * canvas->linesize[plane] + pos_x;
+                    memcpy(dst, src, width);
+                }
+            }
+
+            if (desc->nb_components < 4) {
+                // frame does not have alpha, set alpha to 255
+                desc = av_pix_fmt_desc_get(canvas->format);
+                plane  = desc->comp[3].plane;
+                width  = s->width;
+                height = s->height;
+                pos_x  = s->pos_x;
+                pos_y  = s->pos_y;
+
+                for (int y = 0; y < height; y++) {
+                    uint8_t *dst = canvas->data[plane] + (y + pos_y) * canvas->linesize[plane] + pos_x;
+                    memset(dst, 255, width);
+                }
+            }
+        }
+    } else {
+        // alpha blending
+
+        if (canvas->format == AV_PIX_FMT_ARGB) {
+            int src2_step[4] = { sizeof(uint32_t) };
+            blend_alpha_argb(canvas->data, canvas->linesize,
+                             (const uint8_t **) frame->data, frame->linesize,
+                             (const uint8_t **) canvas->data, canvas->linesize,
+                             src2_step, s->width, s->height, s->pos_x, s->pos_y);
+        } else /* if (canvas->format == AV_PIX_FMT_YUVA420P) */ {
+            int src2_step[4] = { 1, 1, 1, 1 };
+            blend_alpha_yuva(s, canvas->data, canvas->linesize,
+                             (const uint8_t **) frame->data, frame->linesize,
+                             frame->format,
+                             (const uint8_t **) canvas->data, canvas->linesize,
+                             src2_step, s->width, s->height, s->pos_x, s->pos_y);
+        }
+    }
+
+    return 0;
+}
+
+static int copy_canvas_to_frame(WebPContext *s, AVFrame *frame, int key_frame)
+{
+    AVFrame *canvas = s->canvas_frame.f;
+    int ret;
+
+    // VP8 decoder changed the width and height in AVCodecContext.
+    // Change it back to the canvas size.
+    ret = ff_set_dimensions(s->avctx, canvas->width, canvas->height);
+    if (ret < 0)
+        return ret;
+
+    s->avctx->pix_fmt = canvas->format;
+    frame->format     = canvas->format;
+    frame->width      = canvas->width;
+    frame->height     = canvas->height;
+
+    ret = av_frame_get_buffer(frame, 0);
+    if (ret < 0)
+        return ret;
+
+    ret = av_frame_copy_props(frame, canvas);
+    if (ret < 0)
+        return ret;
+
+    // blend the canvas with the background color into the output frame
+    if (canvas->format == AV_PIX_FMT_ARGB) {
+        int src2_step[4] = { 0 };
+        const uint8_t *src2_data[4] = { &s->background_argb[0] };
+        blend_alpha_argb(frame->data, frame->linesize,
+                         (const uint8_t **) canvas->data, canvas->linesize,
+                         (const uint8_t **) src2_data, src2_step, src2_step,
+                         canvas->width, canvas->height, 0, 0);
+    } else /* if (canvas->format == AV_PIX_FMT_YUVA420P) */ {
+        int src2_step[4] = { 0, 0, 0, 0 };
+        blend_alpha_yuva(s, frame->data, frame->linesize,
+                         (const uint8_t **) canvas->data, canvas->linesize,
+                         canvas->format,
+                         s->background_data, src2_step, src2_step,
+                         canvas->width, canvas->height, 0, 0);
+    }
+
+    if (key_frame) {
+        frame->pict_type = AV_PICTURE_TYPE_I;
+        frame->key_frame = 1;
+    } else {
+        frame->pict_type = AV_PICTURE_TYPE_P;
+        frame->key_frame = 0;
+    }
+
+    return 0;
+}
+
+static int dispose_prev_frame_in_canvas(WebPContext *s)
+{
+    AVFrame *canvas = s->canvas_frame.f;
+    int width, height;
+    int pos_x, pos_y;
+
+    if ((s->prev_anmf_flags & ANMF_DISPOSAL_METHOD) == ANMF_DISPOSAL_METHOD_BACKGROUND) {
+        // dispose to background
+
+        if (canvas->format == AV_PIX_FMT_ARGB) {
+            width  = s->prev_width;
+            height = s->prev_height;
+            pos_x  = s->prev_pos_x;
+            pos_y  = s->prev_pos_y;
+
+            for (int y = 0; y < height; y++) {
+                uint32_t *dst = (uint32_t *) (canvas->data[0] + (y + pos_y) * canvas->linesize[0]) + pos_x;
+                memset(dst, 0, width * sizeof(uint32_t));
+            }
+        } else /* if (canvas->format == AV_PIX_FMT_YUVA420P) */ {
+            const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(canvas->format);
+            int plane;
+
+            for (int comp = 0; comp < desc->nb_components; comp++) {
+                plane  = desc->comp[comp].plane;
+                width  = s->prev_width;
+                height = s->prev_height;
+                pos_x  = s->prev_pos_x;
+                pos_y  = s->prev_pos_y;
+                if (comp == 1 || comp == 2) {
+                    width  = AV_CEIL_RSHIFT(width,  desc->log2_chroma_w);
+                    height = AV_CEIL_RSHIFT(height, desc->log2_chroma_h);
+                    pos_x  = AV_CEIL_RSHIFT(pos_x,  desc->log2_chroma_w);
+                    pos_y  = AV_CEIL_RSHIFT(pos_y,  desc->log2_chroma_h);
+                }
+
+                for (int y = 0; y < height; y++) {
+                    uint8_t *dst = canvas->data[plane] + (y + pos_y) * canvas->linesize[plane] + pos_x;
+                    memset(dst, s->transparent_yuva[plane], width);
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+static av_cold int webp_decode_init(AVCodecContext *avctx)
+{
+    WebPContext *s = avctx->priv_data;
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(AV_PIX_FMT_YUVA420P);
+
+    s->avctx = avctx;
+    s->canvas_frame.f = av_frame_alloc();
+    s->frame = av_frame_alloc();
+    if (!s->canvas_frame.f || !s->frame) {
+        av_frame_free(&s->canvas_frame.f);
+        av_frame_free(&s->frame);
+        return AVERROR(ENOMEM);
+    }
+
+    // prepare data pointers for YUVA background
+    for (int i = 0; i < 4; i++)
+        s->background_data[i] = &s->background_yuva[i];
+
+    // convert transparent black from RGBA to YUVA
+    s->transparent_yuva[desc->comp[0].plane] = RGB_TO_Y_CCIR(0, 0, 0);
+    s->transparent_yuva[desc->comp[1].plane] = RGB_TO_U_CCIR(0, 0, 0, 0);
+    s->transparent_yuva[desc->comp[2].plane] = RGB_TO_V_CCIR(0, 0, 0, 0);
+    s->transparent_yuva[desc->comp[3].plane] = 0;
+
+    return 0;
+}
+
+static int decode_frame_common(AVCodecContext *avctx, uint8_t *data, int size,
+                               int *got_frame, int key_frame)
+{
     WebPContext *s = avctx->priv_data;
     GetByteContext gb;
     int ret;
     uint32_t chunk_type, chunk_size;
-    int vp8x_flags = 0;
 
-    s->avctx     = avctx;
-    s->width     = 0;
-    s->height    = 0;
-    *got_frame   = 0;
-    s->has_alpha = 0;
-    s->has_exif  = 0;
-    s->has_iccp  = 0;
-    bytestream2_init(&gb, avpkt->data, avpkt->size);
-
-    if (bytestream2_get_bytes_left(&gb) < 12)
-        return AVERROR_INVALIDDATA;
-
-    if (bytestream2_get_le32(&gb) != MKTAG('R', 'I', 'F', 'F')) {
-        av_log(avctx, AV_LOG_ERROR, "missing RIFF tag\n");
-        return AVERROR_INVALIDDATA;
-    }
-
-    chunk_size = bytestream2_get_le32(&gb);
-    if (bytestream2_get_bytes_left(&gb) < chunk_size)
-        return AVERROR_INVALIDDATA;
-
-    if (bytestream2_get_le32(&gb) != MKTAG('W', 'E', 'B', 'P')) {
-        av_log(avctx, AV_LOG_ERROR, "missing WEBP tag\n");
-        return AVERROR_INVALIDDATA;
-    }
+    bytestream2_init(&gb, data, size);
 
     while (bytestream2_get_bytes_left(&gb) > 8) {
         char chunk_str[5] = { 0 };
@@ -1412,6 +1817,10 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
             return AVERROR_INVALIDDATA;
         chunk_size += chunk_size & 1;
 
+        // we need to dive into RIFF chunk
+        if (chunk_type == MKTAG('R', 'I', 'F', 'F'))
+            chunk_size = 4;
+
         if (bytestream2_get_bytes_left(&gb) < chunk_size) {
            /* we seem to be running out of data, but it could also be that the
               bitstream has trailing junk leading to bogus chunk_size. */
@@ -1419,10 +1828,26 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
         }
 
         switch (chunk_type) {
+        case MKTAG('R', 'I', 'F', 'F'):
+            if (bytestream2_get_le32(&gb) != MKTAG('W', 'E', 'B', 'P')) {
+                av_log(avctx, AV_LOG_ERROR, "missing WEBP tag\n");
+                return AVERROR_INVALIDDATA;
+            }
+            s->vp8x_flags    = 0;
+            s->canvas_width  = 0;
+            s->canvas_height = 0;
+            s->has_exif      = 0;
+            s->has_iccp      = 0;
+            ff_thread_release_buffer(avctx, &s->canvas_frame);
+            break;
         case MKTAG('V', 'P', '8', ' '):
             if (!*got_frame) {
-                ret = vp8_lossy_decode_frame(avctx, p, got_frame,
-                                             avpkt->data + bytestream2_tell(&gb),
+                ret = init_canvas_frame(s, AV_PIX_FMT_YUVA420P, key_frame);
+                if (ret < 0)
+                    return ret;
+
+                ret = vp8_lossy_decode_frame(avctx, s->frame, got_frame,
+                                             data + bytestream2_tell(&gb),
                                              chunk_size);
                 if (ret < 0)
                     return ret;
@@ -1431,8 +1856,13 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
             break;
         case MKTAG('V', 'P', '8', 'L'):
             if (!*got_frame) {
-                ret = vp8_lossless_decode_frame(avctx, p, got_frame,
-                                                avpkt->data + bytestream2_tell(&gb),
+                ret = init_canvas_frame(s, AV_PIX_FMT_ARGB, key_frame);
+                if (ret < 0)
+                    return ret;
+                ff_thread_finish_setup(s->avctx);
+
+                ret = vp8_lossless_decode_frame(avctx, s->frame, got_frame,
+                                                data + bytestream2_tell(&gb),
                                                 chunk_size, 0);
                 if (ret < 0)
                     return ret;
@@ -1441,14 +1871,16 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
             bytestream2_skip(&gb, chunk_size);
             break;
         case MKTAG('V', 'P', '8', 'X'):
-            if (s->width || s->height || *got_frame) {
+            if (s->canvas_width || s->canvas_height || *got_frame) {
                 av_log(avctx, AV_LOG_ERROR, "Canvas dimensions are already set\n");
                 return AVERROR_INVALIDDATA;
             }
-            vp8x_flags = bytestream2_get_byte(&gb);
+            s->vp8x_flags = bytestream2_get_byte(&gb);
             bytestream2_skip(&gb, 3);
             s->width  = bytestream2_get_le24(&gb) + 1;
             s->height = bytestream2_get_le24(&gb) + 1;
+            s->canvas_width  = s->width;
+            s->canvas_height = s->height;
             ret = av_image_check_size(s->width, s->height, 0, avctx);
             if (ret < 0)
                 return ret;
@@ -1456,7 +1888,7 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
         case MKTAG('A', 'L', 'P', 'H'): {
             int alpha_header, filter_m, compression;
 
-            if (!(vp8x_flags & VP8X_FLAG_ALPHA)) {
+            if (!(s->vp8x_flags & VP8X_FLAG_ALPHA)) {
                 av_log(avctx, AV_LOG_WARNING,
                        "ALPHA chunk present, but alpha bit not set in the "
                        "VP8X header\n");
@@ -1466,7 +1898,7 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
                 return AVERROR_INVALIDDATA;
             }
             alpha_header       = bytestream2_get_byte(&gb);
-            s->alpha_data      = avpkt->data + bytestream2_tell(&gb);
+            s->alpha_data      = data + bytestream2_tell(&gb);
             s->alpha_data_size = chunk_size - 1;
             bytestream2_skip(&gb, s->alpha_data_size);
 
@@ -1493,14 +1925,13 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
                 av_log(avctx, AV_LOG_VERBOSE, "Ignoring extra EXIF chunk\n");
                 goto exif_end;
             }
-            if (!(vp8x_flags & VP8X_FLAG_EXIF_METADATA))
+            if (!(s->vp8x_flags & VP8X_FLAG_EXIF_METADATA))
                 av_log(avctx, AV_LOG_WARNING,
                        "EXIF chunk present, but Exif bit not set in the "
                        "VP8X header\n");
 
             s->has_exif = 1;
-            bytestream2_init(&exif_gb, avpkt->data + exif_offset,
-                             avpkt->size - exif_offset);
+            bytestream2_init(&exif_gb, data + exif_offset, size - exif_offset);
             if (ff_tdecode_header(&exif_gb, &le, &ifd_offset) < 0) {
                 av_log(avctx, AV_LOG_ERROR, "invalid TIFF header "
                        "in Exif data\n");
@@ -1513,7 +1944,7 @@ static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
                 goto exif_end;
             }
 
-            av_dict_copy(&((AVFrame *) data)->metadata, exif_metadata, 0);
+            av_dict_copy(&s->frame->metadata, exif_metadata, 0);
 
 exif_end:
             av_dict_free(&exif_metadata);
@@ -1528,21 +1959,72 @@ exif_end:
                 bytestream2_skip(&gb, chunk_size);
                 break;
             }
-            if (!(vp8x_flags & VP8X_FLAG_ICC))
+            if (!(s->vp8x_flags & VP8X_FLAG_ICC))
                 av_log(avctx, AV_LOG_WARNING,
                        "ICCP chunk present, but ICC Profile bit not set in the "
                        "VP8X header\n");
 
             s->has_iccp = 1;
-            sd = av_frame_new_side_data(p, AV_FRAME_DATA_ICC_PROFILE, chunk_size);
+            sd = av_frame_new_side_data(s->frame, AV_FRAME_DATA_ICC_PROFILE, chunk_size);
             if (!sd)
                 return AVERROR(ENOMEM);
 
             bytestream2_get_buffer(&gb, sd->data, chunk_size);
             break;
         }
-        case MKTAG('A', 'N', 'I', 'M'):
+        case MKTAG('A', 'N', 'I', 'M'): {
+            const AVPixFmtDescriptor *desc;
+            int a, r, g, b;
+            if (!(s->vp8x_flags & VP8X_FLAG_ANIMATION)) {
+                av_log(avctx, AV_LOG_WARNING,
+                       "ANIM chunk present, but animation bit not set in the "
+                       "VP8X header\n");
+            }
+            // background is stored as BGRA, we need ARGB
+            s->background_argb[3] = b = bytestream2_get_byte(&gb);
+            s->background_argb[2] = g = bytestream2_get_byte(&gb);
+            s->background_argb[1] = r = bytestream2_get_byte(&gb);
+            s->background_argb[0] = a = bytestream2_get_byte(&gb);
+            //s->background_argb[0] = a = 0;
+            if (s->transparent_bg) {
+                s->background_argb[0] = a = 0;
+                av_log(avctx, AV_LOG_INFO, "force set transparent background\n");    
+            }
+            av_log(avctx, AV_LOG_INFO, 
+                "ANIM background color: bgra 0x%02x(%d) 0x%02x(%d) 0x%02x(%d) 0x%02x(%d)\n",
+                b,b,g,g,r,r,a,a);
+
+            // convert the background color to YUVA
+            desc = av_pix_fmt_desc_get(AV_PIX_FMT_YUVA420P);
+            s->background_yuva[desc->comp[0].plane] = RGB_TO_Y_CCIR(r, g, b);
+            s->background_yuva[desc->comp[1].plane] = RGB_TO_U_CCIR(r, g, b, 0);
+            s->background_yuva[desc->comp[2].plane] = RGB_TO_V_CCIR(r, g, b, 0);
+            s->background_yuva[desc->comp[3].plane] = a;
+
+            bytestream2_skip(&gb, 2); // loop count is ignored
+            break;
+        }
         case MKTAG('A', 'N', 'M', 'F'):
+            if (!(s->vp8x_flags & VP8X_FLAG_ANIMATION)) {
+                av_log(avctx, AV_LOG_WARNING,
+                       "ANMF chunk present, but animation bit not set in the "
+                       "VP8X header\n");
+            }
+            s->pos_x      = bytestream2_get_le24(&gb) * 2;
+            s->pos_y      = bytestream2_get_le24(&gb) * 2;
+            s->width      = bytestream2_get_le24(&gb) + 1;
+            s->height     = bytestream2_get_le24(&gb) + 1;
+            bytestream2_skip(&gb, 3);   // duration
+            s->anmf_flags = bytestream2_get_byte(&gb);
+
+            if (s->width  + s->pos_x > s->canvas_width ||
+                s->height + s->pos_y > s->canvas_height) {
+                av_log(avctx, AV_LOG_ERROR,
+                       "frame does not fit into canvas\n");
+                return AVERROR_INVALIDDATA;
+            }
+            s->vp8x_flags |= VP8X_FLAG_ANIMATION;
+            break;
         case MKTAG('X', 'M', 'P', ' '):
             AV_WL32(chunk_str, chunk_type);
             av_log(avctx, AV_LOG_WARNING, "skipping unsupported chunk: %s\n",
@@ -1558,17 +2040,93 @@ exif_end:
         }
     }
 
-    if (!*got_frame) {
-        av_log(avctx, AV_LOG_ERROR, "image data not found\n");
-        return AVERROR_INVALIDDATA;
+    return size;
+}
+
+static int webp_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
+                             AVPacket *avpkt)
+{
+    AVFrame * const p = data;
+    WebPContext *s = avctx->priv_data;
+    int ret;
+    int key_frame = avpkt->flags & AV_PKT_FLAG_KEY;
+
+    for (int i = 0; i < avpkt->side_data_elems; ++i) {
+        if (avpkt->side_data[i].type == AV_PKT_DATA_NEW_EXTRADATA) {
+            ret = decode_frame_common(avctx, avpkt->side_data[i].data,
+                                      avpkt->side_data[i].size,
+                                      got_frame, key_frame);
+            if (ret < 0)
+                goto end;
+        }
     }
 
-    return avpkt->size;
+    *got_frame   = 0;
+
+    if (key_frame) {
+        // The canvas is passed from one thread to another in a sequence
+        // starting with a key frame followed by non-key frames.
+        // The key frame reports progress 1,
+        // the N-th non-key frame awaits progress N = s->await_progress
+        // and reports progress N + 1.
+        s->await_progress = 0;
+    }
+
+    // reset the frame params
+    s->anmf_flags = 0;
+    s->width      = 0;
+    s->height     = 0;
+    s->pos_x      = 0;
+    s->pos_y      = 0;
+    s->has_alpha  = 0;
+
+    ret = decode_frame_common(avctx, avpkt->data, avpkt->size, got_frame, key_frame);
+    if (ret < 0)
+        goto end;
+
+    if (*got_frame) {
+        if (!(s->vp8x_flags & VP8X_FLAG_ANIMATION)) {
+            // no animation, output the decoded frame
+            av_frame_move_ref(p, s->frame);
+        } else {
+            if (!key_frame) {
+                ff_thread_await_progress(&s->canvas_frame, s->await_progress, 0);
+
+                ret = dispose_prev_frame_in_canvas(s);
+                if (ret < 0)
+                    goto end;
+            }
+
+            ret = blend_frame_into_canvas(s);
+            if (ret < 0)
+                goto end;
+
+            ret = copy_canvas_to_frame(s, p, key_frame);
+            if (ret < 0)
+                goto end;
+
+            ff_thread_report_progress(&s->canvas_frame, s->await_progress + 1, 0);
+        }
+
+        p->pts = avpkt->pts;
+        if (s->show_pts)
+            av_log(NULL, AV_LOG_INFO, "key: %d, pts: %"PRId64"\n", key_frame, p->pts);
+    }
+
+    ret = avpkt->size;
+
+end:
+    av_frame_unref(s->frame);
+    return ret;
 }
 
 static av_cold int webp_decode_close(AVCodecContext *avctx)
 {
     WebPContext *s = avctx->priv_data;
+
+    ff_thread_release_buffer(avctx, &s->canvas_frame);
+    av_frame_free(&s->canvas_frame.f);
+    av_frame_free(&s->frame);
 
     if (s->initialized)
         return ff_vp8_decode_free(avctx);
@@ -1576,13 +2134,75 @@ static av_cold int webp_decode_close(AVCodecContext *avctx)
     return 0;
 }
 
+static void webp_decode_flush(AVCodecContext *avctx)
+{
+    WebPContext *s = avctx->priv_data;
+
+    ff_thread_release_buffer(avctx, &s->canvas_frame);
+}
+
+#if HAVE_THREADS
+static int webp_update_thread_context(AVCodecContext *dst, const AVCodecContext *src)
+{
+    WebPContext *wsrc = src->priv_data;
+    WebPContext *wdst = dst->priv_data;
+    int ret;
+
+    if (dst == src)
+        return 0;
+
+    ff_thread_release_buffer(dst, &wdst->canvas_frame);
+    if (wsrc->canvas_frame.f->data[0] &&
+        (ret = ff_thread_ref_frame(&wdst->canvas_frame, &wsrc->canvas_frame)) < 0)
+        return ret;
+
+    wdst->vp8x_flags      = wsrc->vp8x_flags;
+    wdst->canvas_width    = wsrc->canvas_width;
+    wdst->canvas_height   = wsrc->canvas_height;
+    wdst->prev_anmf_flags = wsrc->anmf_flags;
+    wdst->prev_width      = wsrc->width;
+    wdst->prev_height     = wsrc->height;
+    wdst->prev_pos_x      = wsrc->pos_x;
+    wdst->prev_pos_y      = wsrc->pos_y;
+    wdst->await_progress  = wsrc->await_progress + 1;
+    wdst->transparent_bg  = wsrc->transparent_bg;
+
+    memcpy(wdst->background_argb,  wsrc->background_argb,  sizeof(wsrc->background_argb));
+    memcpy(wdst->background_yuva,  wsrc->background_yuva,  sizeof(wsrc->background_yuva));
+
+    return 0;
+}
+#endif
+
+#define OFFSET(x) offsetof(WebPContext, x)
+#define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
+static const AVOption options[] = {
+    { "trans_bg", "force transparent background", OFFSET(transparent_bg), 
+        AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, VE },
+    { "show_pts", "show frame pts", OFFSET(show_pts), 
+        AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, VE },
+    { NULL },
+};
+
+static const AVClass webp_class = {
+    .class_name = "webp decoder",
+    .item_name  = av_default_item_name,
+    .option     = options,
+    .version    = LIBAVUTIL_VERSION_INT,
+};
+
 AVCodec ff_webp_decoder = {
     .name           = "webp",
     .long_name      = NULL_IF_CONFIG_SMALL("WebP image"),
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_WEBP,
+    .priv_class     = &webp_class,
     .priv_data_size = sizeof(WebPContext),
+    .update_thread_context = ONLY_IF_THREADS_ENABLED(webp_update_thread_context),
+    .init           = webp_decode_init,
     .decode         = webp_decode_frame,
     .close          = webp_decode_close,
+    .flush          = webp_decode_flush,
     .capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
+    .caps_internal  = FF_CODEC_CAP_ALLOCATE_PROGRESS,
 };

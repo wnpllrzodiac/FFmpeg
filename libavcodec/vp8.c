@@ -2852,6 +2852,7 @@ int vp78_decode_init(AVCodecContext *avctx, int is_vp7)
     s->avctx = avctx;
     s->vp7   = avctx->codec->id == AV_CODEC_ID_VP7;
     s->pix_fmt = AV_PIX_FMT_NONE;
+    s->thread_data = NULL;
     avctx->pix_fmt = AV_PIX_FMT_YUV420P;
 
     ff_videodsp_init(&s->vdsp, 8);
