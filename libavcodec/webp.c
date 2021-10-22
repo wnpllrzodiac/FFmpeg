@@ -2178,7 +2178,7 @@ static int webp_update_thread_context(AVCodecContext *dst, const AVCodecContext 
 #define VE AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
 static const AVOption options[] = {
     { "trans_bg", "force transparent background", OFFSET(transparent_bg), 
-        AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, VE },
+        AV_OPT_TYPE_INT, { .i64 = 1 }, 0, 1, VE },
     { "show_pts", "show frame pts", OFFSET(show_pts), 
         AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, VE },
     { NULL },
