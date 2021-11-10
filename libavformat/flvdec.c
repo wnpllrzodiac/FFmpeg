@@ -36,6 +36,7 @@
 #include "internal.h"
 #include "avio_internal.h"
 #include "flv.h"
+#include "libavutil/aes.h"
 
 #define VALIDATE_INDEX_TS_THRESH 2500
 
@@ -70,6 +71,9 @@ typedef struct FLVContext {
     int64_t *keyframe_filepositions;
     int missing_streams;
     AVRational framerate;
+    
+    int tysx_decryption;
+    char *tylive_key;
 } FLVContext;
 
 static int probe(AVProbeData *p, int live)
@@ -945,7 +949,8 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
     AVStream *st    = NULL;
     int last = -1;
     int orig_size;
-
+    int nalu_type;
+    
 retry:
     /* pkt size is repeated at end. skip it */
         pos  = avio_tell(s->pb);
@@ -1250,6 +1255,53 @@ retry_duration:
             stream_type == FLV_STREAM_TYPE_DATA)
         pkt->flags |= AV_PKT_FLAG_KEY;
 
+    if (flv->tysx_decryption) {
+        if (st->codecpar->codec_id == AV_CODEC_ID_H264/* && pkt->flags & AV_PKT_FLAG_KEY*/) {
+            const int skip_nalu_size = 2;
+            //av_log(s, AV_LOG_WARNING, "tysx_decryption nal %02x %02x %02x %02x %02x %02x\n", 
+            //    pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3], pkt->data[4], pkt->data[5]);
+            
+            nalu_type = pkt->data[4] & 0x1F;
+            //av_log(s, AV_LOG_WARNING, "tysx_decryption nalu type %d\n", nalu_type);
+            if (nalu_type >= 1 && nalu_type <= 5/*IDR*/ && pkt->size >= 5 + 64 + skip_nalu_size) {
+                int nal_reference_bit = (pkt->data[4] >> 5) & 0x03;
+                //if (nal_reference_bit == 0x3/*0x2*/) {
+                    struct AVAES *ad;
+                    uint8_t key[16+1] = "tu*jd&8jk6-54Md@";
+                    uint8_t iv[16+1] = "H&*y9_#ghoGy)a*E";
+                    
+                    if (flv->tylive_key)
+                        memcpy(key, flv->tylive_key, 16);
+                    
+                    ad = av_aes_alloc();
+                    if (!ad)
+                        return AVERROR(EINVAL);
+                    
+                    if (av_aes_init(ad, (const uint8_t*)key, 128, 1) < 0)
+                        return AVERROR(EINVAL);
+
+                    av_aes_crypt(ad, pkt->data + 5 + skip_nalu_size, pkt->data + 5 + skip_nalu_size, 4, iv, 1);
+                    
+                    av_free(ad);
+                    ad = NULL;
+                //}
+            }
+        }
+        else if (st->codecpar->codec_id == AV_CODEC_ID_AAC) {
+            //av_log(s, AV_LOG_WARNING, "tysx_decryption aac size %d, %02x %02x %02x %02x %02x %02x\n", 
+            //    pkt->size, pkt->data[0], pkt->data[1], pkt->data[2], pkt->data[3], pkt->data[4], pkt->data[5]);
+            
+            // af 01 21 11 | 45 00 14 50 from publisher
+            // 21 11 45 00 14 50 from avpacket
+            if (pkt->size >= 64) { // 2 bytes latm is already removed, consider small pkt change will influnce metadata fetch, 64 bytes may be a good choice
+                int i;
+                for (i=0;i<8;i++) {
+                    *(pkt->data + i) = *(pkt->data + i) ^ 0x45;
+                }
+            }
+        }
+    }
+
 leave:
     last = avio_rb32(s->pb);
     if (last != orig_size + 11 && last != orig_size + 10 &&
@@ -1280,6 +1332,8 @@ static int flv_read_seek(AVFormatContext *s, int stream_index,
 static const AVOption options[] = {
     { "flv_metadata", "Allocate streams according to the onMetaData array", OFFSET(trust_metadata), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VD },
     { "missing_streams", "", OFFSET(missing_streams), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 0xFF, VD | AV_OPT_FLAG_EXPORT | AV_OPT_FLAG_READONLY },
+    { "flv_tylive", "enable tysx flv decryption", OFFSET(tysx_decryption), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VD },
+    { "tylive_key", "aes decryption key", OFFSET(tylive_key), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, VD },
     { NULL }
 };
 
