@@ -3,8 +3,10 @@
 #else
 #ifndef __ANDROID__
 #include <GL/glew.h>
-#include <GL/glx.h>
 #include <GLFW/glfw3.h>
+    #ifndef _WIN32
+    #include <GL/glx.h>
+    #endif
 #endif
 #endif
 
@@ -24,7 +26,12 @@ static char *strsep(char **stringp, const char *delim) {
 }
 
 #ifndef GL_TRANSITION_USING_EGL
-
+#ifdef _WIN32
+int no_window_init(void)
+{
+    return 0;
+}
+#else
 typedef GLXContext (*glXCreateContextAttribsARBProc)(
     Display *, GLXFBConfig, GLXContext, Bool, const int *);
 
@@ -75,6 +82,7 @@ int no_window_init(void)
 
     return 0;
 }
+#endif // not win32
 #endif
 #endif
 

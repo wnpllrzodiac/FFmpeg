@@ -1,7 +1,7 @@
 #ifndef _GL_UTIL_H_
 #define _GL_UTIL_H_
 
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(_WIN32)
 # define GL_TRANSITION_USING_EGL //remove this line if you don't want to use EGL
 #endif
 

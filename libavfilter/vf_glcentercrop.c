@@ -9,7 +9,9 @@
 #else
 #ifndef __ANDROID__
 #include <GL/glew.h>
-#include <GL/glx.h>
+    #ifndef _WIN32
+    #include <GL/glx.h>
+    #endif
 #endif
 #endif
 
