@@ -105,6 +105,10 @@ static const GLchar *f_shader_source =
 
     GLint time;
     int no_window;
+    int print_shader_src;
+    char *source;
+    
+    GLchar *f_shader_source;
 
 #ifdef GL_TRANSITION_USING_EGL
     EGLDisplay      eglDpy;
@@ -120,6 +124,8 @@ static const GLchar *f_shader_source =
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption glsnow_options[] = {
     {"nowindow", "ssh mode, no window init open gl context", OFFSET(no_window), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
+    {"source", "path to the glsnow source file (defaults to snow effect)", OFFSET(source), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, CHAR_MAX, FLAGS},
+    {"printshadercode", "whether to print shader code to debug", OFFSET(print_shader_src), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, .flags = FLAGS},
     {NULL}};
 
 AVFILTER_DEFINE_CLASS(glsnow);
@@ -186,10 +192,51 @@ static int build_program(AVFilterContext *ctx)
     GLuint v_shader, f_shader;
     GlSnowContext *gs = ctx->priv;
 
-    if (!((v_shader = build_shader(ctx, v_shader_source, GL_VERTEX_SHADER)) &&
-          (f_shader = build_shader(ctx, f_shader_source, GL_FRAGMENT_SHADER))))
+    if (!(v_shader = build_shader(ctx, v_shader_source, GL_VERTEX_SHADER))) {
+        av_log(ctx, AV_LOG_ERROR, "invalid vertex shader\n");
+        return -1;
+    }
+    
+    char *source = NULL;
+    if (gs->source) {
+        FILE *f = fopen(gs->source, "rb");
+
+        if (!f)
+        {
+            av_log(ctx, AV_LOG_ERROR, "effect source file NOT found: \"%s\"\n", gs->source);
+            return -1;
+        }
+
+        fseek(f, 0, SEEK_END);
+        unsigned long fsize = ftell(f);
+        fseek(f, 0, SEEK_SET);
+
+        source = malloc(fsize + 1);
+        fread(source, fsize, 1, f);
+        fclose(f);
+
+        source[fsize] = 0;
+    }
+    
+    const char *effect_source = source ? source : f_shader_source;
+
+    int len = strlen(effect_source);
+    gs->f_shader_source = av_calloc(len, sizeof(*gs->f_shader_source));
+    if (!gs->f_shader_source) {
+        return AVERROR(ENOMEM);
+    }
+
+    memcpy(gs->f_shader_source, effect_source, len * sizeof(*gs->f_shader_source));
+    av_log(ctx, gs->print_shader_src ? AV_LOG_INFO : AV_LOG_DEBUG, "shader source:\n%s\n%s\n", gs->source, gs->f_shader_source);
+
+    if (source) {
+        free(source);
+        source = NULL;
+    }
+
+    if (!(f_shader = build_shader(ctx, gs->f_shader_source, GL_FRAGMENT_SHADER)))
     {
-        av_log(NULL, AV_LOG_ERROR, "failed to build shader: vsh: %d, fsh: %d\n", v_shader, f_shader);
+        av_log(ctx, AV_LOG_ERROR, "invalid fragment shader\n");
         return -1;
     }
 
