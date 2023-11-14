@@ -220,7 +220,7 @@ static int build_program(AVFilterContext *ctx)
     
     const char *effect_source = source ? source : f_shader_source;
 
-    int len = strlen(effect_source);
+    int len = strlen(effect_source) + 1;
     gs->f_shader_source = av_calloc(len, sizeof(*gs->f_shader_source));
     if (!gs->f_shader_source) {
         return AVERROR(ENOMEM);
