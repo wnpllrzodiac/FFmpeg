@@ -31,8 +31,7 @@ precision mediump float;
  
  
 uniform sampler2D tex;
-uniform float u_time;
-uniform vec2 u_resolution;
+uniform float time;
 varying vec2 texCoord;
  
  
@@ -107,7 +106,7 @@ float layeredNoise1_2(in vec2 uv, in float sizeMod, in float alphaMod, in int la
         offset += hash2_2(vec2(alpha, size)) * 10.0;
         
         //Adding noise with movement
-     	noise += noise1_2(uv * size + u_time * animation * 8.0 * MOVEMENT_DIRECTION * MOVEMENT_SPEED + offset) * alpha;
+     	noise += noise1_2(uv * size + time * animation * 8.0 * MOVEMENT_DIRECTION * MOVEMENT_SPEED + offset) * alpha;
         alpha *= alphaMod;
         size *= sizeMod;
     }
@@ -138,7 +137,7 @@ vec2 voronoiPointFromRoot(in vec2 root, in float deg)
 //Voronoi cell point rotation degrees
 float degFromRootUV(in vec2 uv)
 {
- 	return u_time * ANIMATION_SPEED * (hash1_2(uv) - 0.5) * 2.0;   
+ 	return time * ANIMATION_SPEED * (hash1_2(uv) - 0.5) * 2.0;   
 }
  
 vec2 randomAround2_2(in vec2 point, in vec2 range, in vec2 uv)
@@ -158,7 +157,7 @@ vec3 fireParticles(in vec2 uv, in vec2 originalUV)
    
    	//UV manipulation for the faster particle movement
     vec2 tempUV = uv + (noise2_2(uv * 2.0) - 0.5) * 0.1;
-    tempUV += -(noise2_2(uv * 3.0 + u_time) - 0.5) * 0.07;
+    tempUV += -(noise2_2(uv * 3.0 + time) - 0.5) * 0.07;
  
     //Sparks sdf
     dist = length(rotate(tempUV - pointUV, 0.7) * randomAround2_2(PARTICLE_SCALE, PARTICLE_SCALE_VAR, rootUV));
@@ -200,7 +199,7 @@ vec3 layeredParticles(in vec2 uv, in float sizeMod, in float alphaMod, in int la
         noiseOffset = (noise2_2(uv * size * 2.0 + 0.5) - 0.5) * 0.15;
         
         //UV with applied movement
-        bokehUV = (uv * size + u_time * MOVEMENT_DIRECTION * MOVEMENT_SPEED) + offset + noiseOffset; 
+        bokehUV = (uv * size + time * MOVEMENT_DIRECTION * MOVEMENT_SPEED) + offset + noiseOffset; 
         
         //Adding particles								if there is more smoke, remove smaller particles
 		particles += fireParticles(bokehUV, uv) * alpha * (1.0 - smoothstep(0.0, 1.0, smoke) * (float(i) / float(layers)));
@@ -223,12 +222,12 @@ void main()
     uv = uv -.5;
     float vignette = 1.0 - smoothstep(0.4, 1.4, length(uv + vec2(0.0, 0.3)));
     uv *= 3.0;
-    float smokeIntensity = layeredNoise1_2(uv * 10.0 + u_time * 4.0 * MOVEMENT_DIRECTION * MOVEMENT_SPEED, 1.7, 0.7, 6, 0.2);
+    float smokeIntensity = layeredNoise1_2(uv * 10.0 + time * 4.0 * MOVEMENT_DIRECTION * MOVEMENT_SPEED, 1.7, 0.7, 6, 0.2);
     smokeIntensity *= pow(1.0 - smoothstep(-1.0, 1.6, uv.y), 2.0); 
     vec3 smoke = smokeIntensity * SMOKE_COLOR * 0.8 * vignette;
     
     //Cutting holes in smoke
-    smoke *= pow(layeredNoise1_2(uv * 4.0 + u_time * 0.5 * MOVEMENT_DIRECTION * MOVEMENT_SPEED, 1.8, 0.5, 3, 0.2), 2.0) * 1.5;
+    smoke *= pow(layeredNoise1_2(uv * 4.0 + time * 0.5 * MOVEMENT_DIRECTION * MOVEMENT_SPEED, 1.8, 0.5, 3, 0.2), 2.0) * 1.5;
     vec3 particles = layeredParticles(uv, SIZE_MOD, ALPHA_MOD, LAYERS_COUNT, smokeIntensity);
     vec3 col = particles + smoke + SMOKE_COLOR * 0.02;
  
